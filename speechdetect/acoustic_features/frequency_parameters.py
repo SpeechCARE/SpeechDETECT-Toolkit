@@ -2,7 +2,7 @@ import numpy as np
 import parselmouth
 import librosa
 from scipy.signal import get_window
-from utils import frame_signal
+from .utils import frame_signal
 
 
 def get_pitch(data, fs, frame_duration_ms=40, step_size_ms=10, pitch_floor=75, pitch_ceiling=600,

@@ -5,7 +5,7 @@ import nltk
 from nltk.tokenize import word_tokenize
 from functools import cached_property
 
-from speech_fluency_and_speech_production_dynamics import calculate_duration_ms, remove_subranges
+from .speech_fluency_and_speech_production_dynamics import calculate_duration_ms, remove_subranges
 
 # Download NLTK data only if not already present
 try:

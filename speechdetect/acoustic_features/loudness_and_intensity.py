@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.signal import get_window
-from utils import frame_signal
+from .utils import frame_signal
 
 
 # Constants for acoustics

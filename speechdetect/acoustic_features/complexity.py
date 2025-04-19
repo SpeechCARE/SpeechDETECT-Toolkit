@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.signal import welch
 from itertools import permutations
-from utils import frame_signal
+from .utils import frame_signal
 
 # Fractal Dimension
 def hfd(audio_frame, k_max):

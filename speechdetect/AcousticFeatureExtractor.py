@@ -11,51 +11,22 @@ import matplotlib.pyplot as plt
 from typing import List, Dict, Union, Any, Optional, Tuple, Set
 from pathlib import Path
 
-# Import from the acoustic_features package
-from acoustic_features import (
-    # Voice quality features
-    calculate_APQ_from_peaks, calculate_frame_based_APQ, shimmer, analyze_audio_shimmer,
-    calculate_frame_level_hnr, get_voice_quality_metrics, amplitude_range,
-    
-    # Statistical functions
-    sma, de, max, min, span, maxPos, minPos, amean, linregc1, linregc2,
-    linregerrA, linregerrQ, stddev, skewness, kurtosis, quartile1, quartile2,
-    quartile3, iqr1_2, iqr2_3, iqr1_3, percentile1, percentile99, pctlrange0_1,
-    upleveltime75, upleveltime90,
-    
-    # Speech fluency features
-    SpeechBehavior, calculate_duration_ms, remove_subranges,
-    
-    # Rhythmic structure features
-    PauseBehavior,
-    
-    # Loudness and intensity features
-    rms_amplitude, spl_per, peak_amplitude, ste_amplitude, intensity,
-    
-    # Frequency parameters
+from .acoustic_features import (\
+
     get_pitch, calculate_time_varying_jitter, get_formants_frame_based,
-    
-    # Spectral features
     compute_msc, spectral_centriod, ltas, alpha_ratio, log_mel_spectrogram,
     mfcc, lpc, lpcc, spectral_envelope, calculate_cpp, hammIndex,
     plp_features, harmonicity, calculate_lsp_freqs_for_frames, calculate_frame_wise_zcr,
+    analyze_audio_shimmer, calculate_frame_level_hnr, amplitude_range,
+    rms_amplitude, spl_per_frame, peak_amplitude, short_time_energy, intensity,
+    calculate_hfd_per_frame, calculate_frequency_entropy, calculate_amplitude_entropy,
     
-    # Complexity features
-    calculate_hfd_per_frame, calculate_frequency_entropy, calculate_amplitude_entropy
+    # Classes needed for process_file_model
+    PauseBehavior, SpeechBehavior,
+    
+    # Statistical functions and names
+    sma, de, function_names,
 )
-
-# Import functions for API compatibility
-from acoustic_features.cepstral_coefficients_and_spectral_features import extract_spectral_features
-from acoustic_features.complexity import extract_complexity_features
-from acoustic_features.frequency_parameters import extract_frequency_features
-from acoustic_features.loudness_and_intensity import extract_intensity_features
-from acoustic_features.rhythmic_structure import extract_rhythmic_features
-from acoustic_features.speech_fluency_and_speech_production_dynamics import extract_fluency_features
-from acoustic_features.voice_quality import extract_voice_quality_features
-
-# Import function_names for statistical processing
-from acoustic_features.statistical_functions import function_names
-
 
 class AcousticFeatureExtractor:
     """
@@ -79,12 +50,12 @@ class AcousticFeatureExtractor:
         self.logger = logging.getLogger(__name__)
         if not self.logger.handlers:
             handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
         self.logger.setLevel(log_level)
         
-        # Available feature types
+        # Available feature types mapped to their extraction methods
         self.available_features = {
             'spectral': self.extract_spectral_features,
             'complexity': self.extract_complexity_features,
@@ -97,7 +68,7 @@ class AcousticFeatureExtractor:
             'raw': self.process_file,
             'transcription': self.process_file_model
         }
-        
+                
         # VAD model and transcription model (to be set later if needed)
         self.vad_model = None
         self.vad_utils = None
@@ -149,52 +120,399 @@ class AcousticFeatureExtractor:
         self.logger.info("Extracting all features from: %s", audio_path)
         features = {}
         
-        # Extract all feature sets
-        features.update(self.extract_spectral_features(audio_path))
-        features.update(self.extract_complexity_features(audio_path))
-        features.update(self.extract_frequency_features(audio_path))
-        features.update(self.extract_intensity_features(audio_path))
-        features.update(self.extract_rhythmic_features(audio_path))
-        features.update(self.extract_fluency_features(audio_path))
-        features.update(self.extract_voice_quality_features(audio_path))
+        # Extract all available feature sets except 'all' to avoid infinite recursion
+        for feature_type, feature_method in self.available_features.items():
+            # Skip 'all' to prevent infinite recursion
+            if feature_type == 'all':
+                continue
+                
+            try:
+                feature_result = feature_method(audio_path)
+                features.update(feature_result)
+            except Exception as e:
+                self.logger.error("Error extracting %s features: %s", feature_type, str(e))
         
-        self.logger.info("Extracted %d features in total", len(features))
+        self.logger.info("Extracted %d features in total from 'all' option", len(features))
         return features
     
     def extract_spectral_features(self, audio_path):
         """Extract spectral features from audio"""
         self.logger.debug("Extracting spectral features from: %s", audio_path)
-        return extract_spectral_features(audio_path, self.sampling_rate)
+        try:
+            # Load audio file
+            data, fs = librosa.load(audio_path, sr=self.sampling_rate)
+            
+            # Define window parameters
+            window_length_ms = 50
+            window_step_ms = 25
+            
+            features = {}
+            
+            # Spectral features extraction
+            try:
+                # Modulation Spectrum Coefficients
+                msc = compute_msc(data, fs, nfft=512, window_length_ms=window_length_ms, window_step_ms=window_step_ms, num_msc=13)
+                features.update(self.process_matrix(msc, 'MSC'))
+                
+                # Spectral centroids
+                centroids = spectral_centriod(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(np.array(centroids), 'CENTRIODS'))
+                
+                # Long Term Average Spectrum
+                LTAS, _ = ltas(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(LTAS, 'LTAS'))
+                
+                # Alpha ratio
+                ALPHA_RATIO = alpha_ratio(data, fs, window_length_ms, window_step_ms, (0, 1000), (1000, 5000))
+                features['ALPHA_RATIO'] = ALPHA_RATIO
+                
+                # Log Mel Spectrogram
+                LOG_MEL_SPECTROGRAM = log_mel_spectrogram(data, fs, window_length_ms, window_step_ms, melbands=8, fmin=20, fmax=6500)
+                features.update(self.process_matrix(LOG_MEL_SPECTROGRAM, 'LOG_MEL_SPECTROGRAM'))
+                
+                # MFCCs
+                MFCC = mfcc(data, fs, window_length_ms, window_step_ms, melbands=26, lifter=20)[:15]
+                features.update(self.process_matrix(MFCC, 'MFCC'))
+                
+                # Linear Prediction Coefficients
+                LPC = lpc(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_matrix(LPC, 'LPC'))
+                
+                # Linear Prediction Cepstral Coefficients
+                LPCC = lpcc(data, fs, window_length_ms, window_step_ms, lpc_length=8)
+                features.update(self.process_matrix(LPCC, 'LPCC'))
+                
+                # Spectral Envelope
+                ENVELOPE = spectral_envelope(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_matrix(ENVELOPE, 'ENVELOPE'))
+                
+                # Cepstral Peak Prominence
+                CPP = calculate_cpp(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(CPP, 'CPP'))
+                
+                # Hammarberg Index
+                HAMM_INDEX, _, _ = hammIndex(data, fs)
+                features.update(self.process_row(HAMM_INDEX, 'HAMMARBERG_INDEX'))
+                
+                # Perceptual Linear Prediction
+                PLP = plp_features(data, fs, num_filters=26, fmin=20, fmax=8000)
+                features.update(self.process_matrix(PLP, 'PLP'))
+                
+                # Line Spectral Pairs
+                lspFreq = calculate_lsp_freqs_for_frames(data, fs, window_length_ms, window_step_ms, order=8)
+                features.update(self.process_matrix(lspFreq, "LSP"))
+                
+                # Zero Crossing Rate
+                ZCR = calculate_frame_wise_zcr(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(ZCR, "ZCR"))
+                
+                self.logger.info("Extracted %d spectral features", len(features))
+            except Exception as e:
+                self.logger.error(f"Error processing spectral features: {e}")
+                
+            return features
+        except Exception as e:
+            self.logger.error("Runtime error extracting spectral features: %s", str(e))
+            return {}
     
     def extract_complexity_features(self, audio_path):
         """Extract complexity features from audio"""
         self.logger.debug("Extracting complexity features from: %s", audio_path)
-        return extract_complexity_features(audio_path, self.sampling_rate)
+        try:
+            # Load audio file
+            data, fs = librosa.load(audio_path, sr=self.sampling_rate)
+            
+            # Define window parameters
+            window_length_ms = 50
+            window_step_ms = 25
+            
+            features = {}
+            
+            # Complexity features extraction
+            try:
+                # Higuchi Fractal Dimension
+                HFD = calculate_hfd_per_frame(data, fs, window_length_ms, window_step_ms, 10)
+                features.update(self.process_row(HFD, 'HFD'))
+                
+                # Frequency Entropy
+                FREQ_ENTROPY = calculate_frequency_entropy(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(FREQ_ENTROPY, 'FREQ_ENTROPY'))
+                
+                # Amplitude Entropy
+                AMP_ENTROPY = calculate_amplitude_entropy(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(AMP_ENTROPY, 'AMP_ENTROPY'))
+                
+                # Zero Crossing Rate can also be considered a complexity feature
+                ZCR = calculate_frame_wise_zcr(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(ZCR, "ZCR"))
+                
+                self.logger.info("Extracted %d complexity features", len(features))
+            except Exception as e:
+                self.logger.error(f"Error processing complexity features: {e}")
+                
+            return features
+        except Exception as e:
+            self.logger.error("Runtime error extracting complexity features: %s", str(e))
+            return {}
     
     def extract_frequency_features(self, audio_path):
         """Extract frequency features from audio"""
         self.logger.debug("Extracting frequency features from: %s", audio_path)
-        return extract_frequency_features(audio_path, self.sampling_rate)
+        try:
+            # Load audio file
+            data, fs = librosa.load(audio_path, sr=self.sampling_rate)
+            
+            # Define window parameters
+            window_length_ms = 50
+            window_step_ms = 25
+            
+            features = {}
+            
+            # Frequency parameters extraction
+            try:
+                # Fundamental Frequency (F0)
+                F0 = get_pitch(data, fs, window_length_ms, window_step_ms)
+                F0_valid = F0[~np.isnan(F0)]
+                features.update(self.process_row(F0_valid, 'F0'))
+                
+                # Jitter
+                jitter = calculate_time_varying_jitter(F0, fs, window_length_ms, window_step_ms, window_length_ms*2, window_step_ms*2)
+                features.update(self.process_row(np.array(jitter), 'Jitter'))
+                
+                # Formants (F1, F2, F3)
+                F_formants = get_formants_frame_based(data, fs, window_length_ms, window_step_ms, [1, 2, 3])
+                for i in range(F_formants.shape[0]):
+                    features.update(self.process_row(F_formants[i, :], f'F{i+1}'))
+                
+                # Harmonicity can also be considered a frequency feature
+                HARMONICITY = harmonicity(data, fs)
+                features['HARMONICITY'] = HARMONICITY
+                
+                self.logger.info("Extracted %d frequency features", len(features))
+            except Exception as e:
+                self.logger.error(f"Error processing frequency features: {e}")
+                
+            return features
+        except Exception as e:
+            self.logger.error("Runtime error extracting frequency features: %s", str(e))
+            return {}
     
     def extract_intensity_features(self, audio_path):
         """Extract intensity and loudness features from audio"""
         self.logger.debug("Extracting intensity features from: %s", audio_path)
-        return extract_intensity_features(audio_path, self.sampling_rate)
+        try:
+            # Load audio file
+            data, fs = librosa.load(audio_path, sr=self.sampling_rate)
+            
+            # Define window parameters
+            window_length_ms = 50
+            window_step_ms = 25
+            
+            features = {}
+            
+            # Loudness and intensity parameters extraction
+            try:
+                # Root Mean Square amplitude
+                RMS = rms_amplitude(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(RMS, 'RMS'))
+                
+                # Sound Pressure Level
+                SPL = spl_per_frame(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(SPL, 'SPL'))
+                
+                # Peak amplitude
+                PEAK = peak_amplitude(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(PEAK, 'PEAK'))
+                
+                # Short-time energy
+                STE = short_time_energy(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(STE, 'STE'))
+                
+                # Intensity
+                INTENSITY = intensity(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(INTENSITY, 'INTENSITY'))
+                
+                # Amplitude range
+                APQ_range, APQ_std = amplitude_range(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(APQ_range, 'Amplitude_Range'))
+                features.update(self.process_row(APQ_std, 'APQ2'))
+                
+                self.logger.info("Extracted %d intensity features", len(features))
+            except Exception as e:
+                self.logger.error(f"Error processing intensity features: {e}")
+                
+            return features
+        except Exception as e:
+            self.logger.error("Runtime error extracting intensity features: %s", str(e))
+            return {}
     
     def extract_rhythmic_features(self, audio_path):
         """Extract rhythmic features from audio"""
         self.logger.debug("Extracting rhythmic features from: %s", audio_path)
-        return extract_rhythmic_features(audio_path, self.sampling_rate)
+        
+        # Check if required models are available
+        if None in (self.vad_model, self.vad_utils, self.transcription_model):
+            self.logger.warning("VAD and transcription models are required for rhythmic features but not set")
+            return {}
+            
+        try:
+            features = {}
+            
+            # Create PauseBehavior instance for rhythmic analysis
+            try:
+                pause_behavior = PauseBehavior(self.vad_model, self.vad_utils, self.transcription_model)
+                pause_behavior.configure(audio_path)
+                
+                # List of methods to extract from pause_behavior for rhythmic features
+                rhythmic_methods = [
+                    'syllable_rate', 'speech_rate', 'articulation_rate',
+                    'mean_pause_duration', 'mean_silence_duration', 'mean_speech_duration',
+                    'speech_to_pause_ratio', 'percentage_silence', 'percentage_voice'
+                ]
+                
+                # Extract relevant rhythmic features
+                for name in rhythmic_methods:
+                    method = getattr(pause_behavior, name, None)
+                    if method and callable(method):
+                        try:
+                            features[name] = method()
+                        except Exception as e:
+                            self.logger.error(f"Error executing PauseBehavior method {name}: {e}")
+                
+                self.logger.info("Extracted %d rhythmic features", len(features))
+            except Exception as e:
+                self.logger.error(f"Error in rhythmic feature extraction: {e}")
+                
+            return features
+        except Exception as e:
+            self.logger.error("Runtime error extracting rhythmic features: %s", str(e))
+            return {}
     
     def extract_fluency_features(self, audio_path):
         """Extract speech fluency features from audio"""
         self.logger.debug("Extracting fluency features from: %s", audio_path)
-        return extract_fluency_features(audio_path, self.sampling_rate)
+        
+        # Check if required models are available
+        if None in (self.vad_model, self.vad_utils, self.transcription_model):
+            self.logger.warning("VAD and transcription models are required for fluency features but not set")
+            return {}
+            
+        try:
+            features = {}
+            
+            # Create SpeechBehavior instance for fluency analysis
+            try:
+                # First, set up PauseBehavior to get speech segmentation
+                pause_behavior = PauseBehavior(self.vad_model, self.vad_utils, self.transcription_model)
+                pause_behavior.configure(audio_path)
+                
+                # Then, set up SpeechBehavior using data from PauseBehavior
+                speech_behavior = SpeechBehavior(self.vad_model, self.vad_utils, self.transcription_model)
+                
+                # Copy data from pause_behavior to speech_behavior
+                speech_behavior.data = pause_behavior.data
+                speech_behavior.silence_ranges = pause_behavior.silence_ranges
+                speech_behavior.speech_ranges = pause_behavior.speech_ranges
+                speech_behavior.transcription_result = pause_behavior.transcription_result
+                speech_behavior.text = pause_behavior.text
+                
+                # Perform phoneme alignment
+                speech_behavior.phoneme_alignment(audio_path)
+                
+                # List of methods to extract from speech_behavior for fluency features
+                fluency_methods = [
+                    'phonation_rate', 'phonation_time', 'articulation_time', 
+                    'mean_duration_of_bursts', 'number_of_pauses', 'number_of_filled_pauses',
+                    'filled_pauses_per_min', 'mean_length_of_runs', 'hesitation_ratio'
+                ]
+                
+                # Extract relevant fluency features
+                for name in fluency_methods:
+                    method = getattr(speech_behavior, name, None)
+                    if method and callable(method):
+                        try:
+                            features[name] = method()
+                        except Exception as e:
+                            self.logger.error(f"Error executing SpeechBehavior method {name}: {e}")
+                
+                # Process regularity and PVI features
+                try:
+                    for i, res in enumerate(speech_behavior.regularity_of_segments()):
+                        features[f"regularity_{i}"] = res
+                    for i, res in enumerate(speech_behavior.alternating_regularity()):
+                        features[f"PVI_{i}"] = res
+                except Exception as e_reg:
+                    self.logger.error(f"Error processing regularity/PVI features: {e_reg}")
+                
+                # Process relative sentence duration
+                try:
+                    relative_sentence_duration = speech_behavior.relative_sentence_duration()
+                    features.update(self.process_row(np.array(relative_sentence_duration), "relative_sentence_duration"))
+                except Exception as e_rel:
+                    self.logger.error(f"Error processing relative sentence duration: {e_rel}")
+                
+                self.logger.info("Extracted %d fluency features", len(features))
+            except Exception as e:
+                self.logger.error(f"Error in fluency feature extraction: {e}")
+                
+            return features
+        except Exception as e:
+            self.logger.error("Runtime error extracting fluency features: %s", str(e))
+            return {}
     
     def extract_voice_quality_features(self, audio_path):
         """Extract voice quality features from audio"""
         self.logger.debug("Extracting voice quality features from: %s", audio_path)
-        return extract_voice_quality_features(audio_path, self.sampling_rate)
+        try:
+            # Load audio file
+            data, fs = librosa.load(audio_path, sr=self.sampling_rate)
+            
+            # Define window parameters
+            window_length_ms = 50
+            window_step_ms = 25
+            
+            features = {}
+            
+            # Voice quality features extraction
+            try:
+                # Shimmer
+                SHIMMER = analyze_audio_shimmer(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(SHIMMER, 'SHIMMER'))
+                
+                # Harmonics-to-Noise Ratio and Noise-to-Harmonics Ratio
+                HNR, NHR = calculate_frame_level_hnr(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(HNR, 'HNR'))
+                features.update(self.process_row(NHR, 'NHR'))
+                
+                # Harmonicity
+                HARMONICITY = harmonicity(data, fs)
+                features['HARMONICITY'] = HARMONICITY
+                
+                # Cepstral Peak Prominence (also a voice quality feature)
+                CPP = calculate_cpp(data, fs, window_length_ms, window_step_ms)
+                features.update(self.process_row(CPP, 'CPP'))
+                
+                # Hammarberg Index (spectral tilt related to voice quality)
+                HAMM_INDEX, _, _ = hammIndex(data, fs)
+                features.update(self.process_row(HAMM_INDEX, 'HAMMARBERG_INDEX'))
+                
+                # Alpha Ratio (spectral tilt related to voice quality)
+                ALPHA_RATIO = alpha_ratio(data, fs, window_length_ms, window_step_ms, (0, 1000), (1000, 5000))
+                features['ALPHA_RATIO'] = ALPHA_RATIO
+                
+                # Jitter (also a voice quality feature)
+                F0 = get_pitch(data, fs, window_length_ms, window_step_ms)
+                jitter = calculate_time_varying_jitter(F0, fs, window_length_ms, window_step_ms, window_length_ms*2, window_step_ms*2)
+                features.update(self.process_row(np.array(jitter), 'Jitter'))
+                
+                self.logger.info("Extracted %d voice quality features", len(features))
+            except Exception as e:
+                self.logger.error(f"Error processing voice quality features: {e}")
+                
+            return features
+        except Exception as e:
+            self.logger.error("Runtime error extracting voice quality features: %s", str(e))
+            return {}
     
     def process_row(self, row, feature_name, index=-1):
         """
@@ -214,16 +532,40 @@ class AcousticFeatureExtractor:
         dict
             Dictionary of processed features
         """
+        # Import all statistical functions individually
+        from .acoustic_features.statistical_functions import (
+            max, min, span, maxPos, minPos, amean, linregc1, linregc2, 
+            linregerrA, linregerrQ, stddev, skewness, kurtosis, 
+            quartile1, quartile2, quartile3, iqr1_2, iqr2_3, iqr1_3,
+            percentile1, percentile99, pctlrange0_1, upleveltime75, upleveltime90
+        )
+        
+        # Create a dictionary mapping function names to the actual function
+        stat_funcs = {
+            "max": max, "min": min, "span": span, "maxPos": maxPos, "minPos": minPos,
+            "amean": amean, "linregc1": linregc1, "linregc2": linregc2,
+            "linregerrA": linregerrA, "linregerrQ": linregerrQ, "stddev": stddev,
+            "skewness": skewness, "kurtosis": kurtosis, "quartile1": quartile1,
+            "quartile2": quartile2, "quartile3": quartile3, "iqr1_2": iqr1_2,
+            "iqr2_3": iqr2_3, "iqr1_3": iqr1_3, "percentile1": percentile1,
+            "percentile99": percentile99, "pctlrange0_1": pctlrange0_1,
+            "upleveltime75": upleveltime75, "upleveltime90": upleveltime90
+        }
+        
         row_sma = sma(row)
         results = {}
         
         # Apply statistical functions to smoothed signal
         for func_name in function_names:
-            # Use globals() to access the imported functions
-            func = globals()[func_name]
+            # Get the function from our mapping instead of globals()
+            func = stat_funcs.get(func_name)
+            if func is None:
+                self.logger.warning(f"Statistical function {func_name} not found in stat_funcs mapping.")
+                continue
             try:
                 result = func(row_sma)
-            except:
+            except Exception as e:
+                self.logger.error(f"Error applying {func_name} to {feature_name}: {e}")
                 result = None
                 
             if index >= 0:
@@ -236,11 +578,14 @@ class AcousticFeatureExtractor:
         # Apply statistical functions to derivative of smoothed signal
         row_sma_de = de(row_sma)
         for func_name in function_names:
-            # Use globals() to access the imported functions
-            func = globals()[func_name]
+            func = stat_funcs.get(func_name)
+            if func is None:
+                self.logger.warning(f"Statistical function {func_name} not found in stat_funcs mapping.")
+                continue
             try:
                 result = func(row_sma_de)
-            except:
+            except Exception as e:
+                self.logger.error(f"Error applying {func_name} to derivative of {feature_name}: {e}")
                 result = None
                 
             if index >= 0:
@@ -307,117 +652,139 @@ class AcousticFeatureExtractor:
         """
         self.logger.info("Processing file for raw feature extraction: %s", filepath)
         
-        # Load audio file
-        data, fs = librosa.load(filepath, sr=self.sampling_rate)
+        try:
+            data, fs = librosa.load(filepath, sr=self.sampling_rate)
+        except Exception as e:
+            self.logger.error(f"Failed to load audio file {filepath}: {e}")
+            return {}
         
         # Define window parameters
         window_length_ms = 50
         window_step_ms = 25
         
-        # Process frequency parameters
-        F0 = get_pitch(data, fs, window_length_ms, window_step_ms)
-        F0 = F0[~np.isnan(F0)]
-        jitter = calculate_time_varying_jitter(F0, fs, window_length_ms, window_step_ms, window_length_ms*2, window_step_ms*2)
-        F1 = get_formants_frame_based(data, fs, window_length_ms, window_step_ms, [1, 2, 3])
-        self.logger.info("Processed frequency parameters")
+        # --- Feature Calculation with Error Handling ---
+        features = {}
         
-        # Process spectral features
-        msc = compute_msc(data, fs, nfft=512, window_length_ms=window_length_ms, window_step_ms=window_step_ms, num_msc=13)
-        centroids = spectral_centriod(data, fs, window_length_ms, window_step_ms)
-        LTAS = ltas(data, fs, window_length_ms, window_step_ms)[0]
-        ALPHA_RATIO = alpha_ratio(data, fs, window_length_ms, window_step_ms, (0, 1000), (1000, 5000))
-        LOG_MEL_SPECTROGRAM = log_mel_spectrogram(data, fs, window_length_ms, window_step_ms, melbands=8, fmin=20, fmax=6500)
-        MFCC = mfcc(data, fs, window_length_ms, window_step_ms, melbands=26, lifter=20)[:15]
-        LPC = lpc(data, fs, window_length_ms, window_step_ms)
-        LPCC = lpcc(data, fs, window_length_ms, window_step_ms, lpc_length=8)
-        ENVELOPE = spectral_envelope(data, fs, window_length_ms, window_step_ms)
-        CPP = calculate_cpp(data, fs, window_length_ms, window_step_ms)
-        HAMM_INDEX = hammIndex(data, fs)[0]
-        PLP = plp_features(data, fs, num_filters=26, fmin=20, fmax=8000)
-        HARMONICITY = harmonicity(data, fs)
-        lspFreq = calculate_lsp_freqs_for_frames(data, fs, window_length_ms, window_step_ms, order=8)
-        ZCR = calculate_frame_wise_zcr(data, fs, window_length_ms, window_step_ms)
-        self.logger.info("Processed spectral domain features")
-        
-        # Process voice quality
-        APQ = None  # Not used in the original code
-        SHIMMER = analyze_audio_shimmer(data, fs, window_length_ms, window_step_ms)
-        HNR, NHR = calculate_frame_level_hnr(data, fs, window_length_ms, window_step_ms)
-        APQ_range, APQ_std = amplitude_range(data, fs, window_length_ms, window_step_ms)
-        self.logger.info("Processed voice quality features")
-        
-        # Process loudness and intensity
-        RMS = rms_amplitude(data, fs, window_length_ms, window_step_ms)
-        SPL = spl_per(data, fs, window_length_ms, window_step_ms)
-        PEAK = peak_amplitude(data, fs, window_length_ms, window_step_ms)
-        STE = ste_amplitude(data, fs, window_length_ms, window_step_ms)
-        INTENSITY = intensity(data, fs, window_length_ms, window_step_ms)
-        self.logger.info("Processed loudness and intensity parameters")
-        
-        # Process complexity
-        HFD = calculate_hfd_per_frame(data, fs, window_length_ms, window_step_ms, 10)
-        FREQ_ENTROPY = calculate_frequency_entropy(data, fs, window_length_ms, window_step_ms)
-        AMP_ENTROPY = calculate_amplitude_entropy(data, fs, window_length_ms, window_step_ms)
-        self.logger.info("Processed complexity features")
-        
-        # Compile results
-        results = []
-        
-        # Append frequency parameters
-        results.append(self.process_row(F0, 'F0'))
-        results.append(self.process_row(np.array(jitter), 'Jitter'))
-        results.append(self.process_row(F1[0, :], 'F1'))
-        results.append(self.process_row(F1[1, :], 'F2'))
-        results.append(self.process_row(F1[2, :], 'F3'))
-        self.logger.debug("Frequency parameters: %d features", self.length(results))
-        
-        # Append spectral domain
-        results.append(self.process_matrix(msc, 'MSC'))
-        results.append(self.process_row(np.array(centroids), 'CENTRIODS'))
-        results.append(self.process_row(LTAS, 'LTAS'))
-        results.append(self.process_matrix(LOG_MEL_SPECTROGRAM, 'LOG_MEL_SPECTROGRAM'))
-        results.append(self.process_matrix(MFCC, 'MFCC'))
-        results.append(self.process_matrix(LPC, 'LPC'))
-        results.append(self.process_matrix(LPCC, 'LPCC'))
-        results.append(self.process_matrix(ENVELOPE, 'ENVELOPE'))
-        results.append(self.process_row(CPP, 'CPP'))
-        results.append(self.process_matrix(PLP, 'PLP'))
-        results.append(self.process_matrix(lspFreq, "LSP"))
-        self.logger.debug("Spectral domain: %d features", self.length(results))
-        
-        # Append voice quality
-        results.append(self.process_row(APQ_std, 'APQ2'))
-        results.append(self.process_row(SHIMMER, 'SHIMMER'))
-        results.append(self.process_row(HNR, 'HNR'))
-        results.append(self.process_row(NHR, 'NHR'))
-        results.append({'ALPHA_RATIO': ALPHA_RATIO})
-        results.append(self.process_row(HAMM_INDEX, 'HAMMARBERG_INDEX'))
-        results.append({'HARMONICITY': HARMONICITY})
-        self.logger.debug("Voice quality: %d features", self.length(results))
-        
-        # Append loudness and intensity
-        results.append(self.process_row(APQ_range, 'Amplitude_Range'))
-        results.append(self.process_row(RMS, 'RMS'))
-        results.append(self.process_row(SPL, 'SPL'))
-        results.append(self.process_row(PEAK, 'PEAK'))
-        results.append(self.process_row(STE, 'STE'))
-        results.append(self.process_row(INTENSITY, 'INTENSITY'))
-        self.logger.debug("Loudness: %d features", self.length(results))
-        
-        # Append complexity
-        results.append(self.process_row(HFD, 'HFD'))
-        results.append(self.process_row(FREQ_ENTROPY, 'FREQ_ENTROPY'))
-        results.append(self.process_row(AMP_ENTROPY, 'AMP_ENTROPY'))
-        results.append(self.process_row(ZCR, "ZCR"))
-        self.logger.debug("Complexity: %d features", self.length(results))
-        
-        # Merge all results
-        final_results = {}
-        for res in results:
-            final_results.update(res)
+        # Frequency parameters
+        try:
+            F0 = get_pitch(data, fs, window_length_ms, window_step_ms)
+            F0_valid = F0[~np.isnan(F0)]
+            features.update(self.process_row(F0_valid, 'F0'))
             
-        self.logger.info("Extracted a total of %d features", len(final_results))
-        return final_results
+            jitter = calculate_time_varying_jitter(F0, fs, window_length_ms, window_step_ms, window_length_ms*2, window_step_ms*2)
+            features.update(self.process_row(np.array(jitter), 'Jitter'))
+            
+            F_formants = get_formants_frame_based(data, fs, window_length_ms, window_step_ms, [1, 2, 3])
+            for i in range(F_formants.shape[0]):
+                features.update(self.process_row(F_formants[i, :], f'F{i+1}'))
+            self.logger.info("Processed frequency parameters")
+        except Exception as e:
+            self.logger.error(f"Error processing frequency parameters: {e}")
+            
+        # Spectral features
+        try:
+            msc = compute_msc(data, fs, nfft=512, window_length_ms=window_length_ms, window_step_ms=window_step_ms, num_msc=13)
+            features.update(self.process_matrix(msc, 'MSC'))
+            
+            centroids = spectral_centriod(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(np.array(centroids), 'CENTRIODS'))
+            
+            LTAS, _ = ltas(data, fs, window_length_ms, window_step_ms) # Ignore freq array return
+            features.update(self.process_row(LTAS, 'LTAS'))
+            
+            ALPHA_RATIO = alpha_ratio(data, fs, window_length_ms, window_step_ms, (0, 1000), (1000, 5000))
+            # Alpha ratio is often scalar, handle differently if needed, here adding directly
+            features['ALPHA_RATIO'] = ALPHA_RATIO 
+
+            LOG_MEL_SPECTROGRAM = log_mel_spectrogram(data, fs, window_length_ms, window_step_ms, melbands=8, fmin=20, fmax=6500)
+            features.update(self.process_matrix(LOG_MEL_SPECTROGRAM, 'LOG_MEL_SPECTROGRAM'))
+            
+            MFCC = mfcc(data, fs, window_length_ms, window_step_ms, melbands=26, lifter=20)[:15]
+            features.update(self.process_matrix(MFCC, 'MFCC'))
+            
+            LPC = lpc(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_matrix(LPC, 'LPC'))
+            
+            LPCC = lpcc(data, fs, window_length_ms, window_step_ms, lpc_length=8)
+            features.update(self.process_matrix(LPCC, 'LPCC'))
+            
+            ENVELOPE = spectral_envelope(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_matrix(ENVELOPE, 'ENVELOPE'))
+            
+            CPP = calculate_cpp(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(CPP, 'CPP'))
+            
+            HAMM_INDEX, _, _ = hammIndex(data, fs) # Ignore freq and Pxx return
+            features.update(self.process_row(HAMM_INDEX, 'HAMMARBERG_INDEX'))
+            
+            PLP = plp_features(data, fs, num_filters=26, fmin=20, fmax=8000)
+            features.update(self.process_matrix(PLP, 'PLP'))
+            
+            HARMONICITY = harmonicity(data, fs)
+            features['HARMONICITY'] = HARMONICITY # Often scalar
+            
+            lspFreq = calculate_lsp_freqs_for_frames(data, fs, window_length_ms, window_step_ms, order=8)
+            features.update(self.process_matrix(lspFreq, "LSP"))
+            
+            ZCR = calculate_frame_wise_zcr(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(ZCR, "ZCR"))
+            self.logger.info("Processed spectral domain features")
+        except Exception as e:
+            self.logger.error(f"Error processing spectral features: {e}")
+
+        # Voice quality
+        try:
+            SHIMMER = analyze_audio_shimmer(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(SHIMMER, 'SHIMMER'))
+            
+            HNR, NHR = calculate_frame_level_hnr(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(HNR, 'HNR'))
+            features.update(self.process_row(NHR, 'NHR'))
+            
+            # Amplitude range returns range and std deviation
+            APQ_range, APQ_std = amplitude_range(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(APQ_range, 'Amplitude_Range')) # Renamed from APQ_range
+            features.update(self.process_row(APQ_std, 'APQ2')) # Renamed from APQ_std
+            self.logger.info("Processed voice quality features")
+        except Exception as e:
+            self.logger.error(f"Error processing voice quality features: {e}")
+
+        # Loudness and intensity
+        try:
+            RMS = rms_amplitude(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(RMS, 'RMS'))
+            
+            SPL = spl_per_frame(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(SPL, 'SPL'))
+            
+            PEAK = peak_amplitude(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(PEAK, 'PEAK'))
+            
+            STE = short_time_energy(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(STE, 'STE'))
+            
+            INTENSITY = intensity(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(INTENSITY, 'INTENSITY'))
+            self.logger.info("Processed loudness and intensity parameters")
+        except Exception as e:
+            self.logger.error(f"Error processing loudness and intensity features: {e}")
+
+        # Complexity
+        try:
+            HFD = calculate_hfd_per_frame(data, fs, window_length_ms, window_step_ms, 10)
+            features.update(self.process_row(HFD, 'HFD'))
+            
+            FREQ_ENTROPY = calculate_frequency_entropy(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(FREQ_ENTROPY, 'FREQ_ENTROPY'))
+            
+            AMP_ENTROPY = calculate_amplitude_entropy(data, fs, window_length_ms, window_step_ms)
+            features.update(self.process_row(AMP_ENTROPY, 'AMP_ENTROPY'))
+            self.logger.info("Processed complexity features")
+        except Exception as e:
+            self.logger.error(f"Error processing complexity features: {e}")
+
+        self.logger.info("Extracted a total of %d raw features", len(features))
+        return features
     
     def process_file_model(self, filepath):
         """
@@ -437,77 +804,101 @@ class AcousticFeatureExtractor:
         -------
         ValueError
             If models are not set
+        ImportError
+            If required dependencies for fluency/rhythmic features are missing
         """
         if None in (self.vad_model, self.vad_utils, self.transcription_model):
             raise ValueError("VAD and transcription models must be set using set_models() before calling this method")
-        
+            # Raise the specific import error if possible, otherwise a generic one
+        try:
+            # Attempting to instantiate will raise the specific error if placeholder is used
+            PauseBehavior(None, None, None)
+            SpeechBehavior(None, None, None)
+        except Exception:
+            raise ImportError("Required dependencies for fluency/rhythmic features are missing.")
+
         self.logger.info("Processing file with VAD and transcription models: %s", filepath)
         
-        # Process rhythmic features
         p_results = {}
-        pause_behavior = PauseBehavior(self.vad_model, self.vad_utils, self.transcription_model)
-        pause_behavior.configure(filepath)
-        
-        voiceProb_signal = self.vad_model.audio_forward(pause_behavior.data, sr=16000)
-        voiceProb_signal = np.array(voiceProb_signal[0])
-        prob = self.process_row(voiceProb_signal, "voiceProb")
-        
-        # List of methods to exclude
-        excluded_methods = ['__init__', 'configure']
-        
-        # Iterate through all methods of the pause_behavior instance
-        self.logger.debug("Extracting pause behavior features")
-        for name, method in inspect.getmembers(pause_behavior, predicate=inspect.ismethod):
-            # Check if the method is not in the excluded list
-            if name not in excluded_methods:
-                # Invoke each method and store the result
-                p_results[name] = method()
-        
-        # Process speech features
         s_results = {}
-        speech_behavior = SpeechBehavior(self.vad_model, self.vad_utils, self.transcription_model)
-        
-        # Copy data from pause_behavior to speech_behavior
-        speech_behavior.data = pause_behavior.data
-        speech_behavior.silence_ranges = pause_behavior.silence_ranges
-        speech_behavior.speech_ranges = pause_behavior.speech_ranges
-        speech_behavior.transcription_result = pause_behavior.transcription_result
-        speech_behavior.text = pause_behavior.text
-        
-        # Perform phoneme alignment
-        alignment_error = speech_behavior.phoneme_alignment(filepath)
-        self.logger.info("Phoneme alignment completed (total segments: %d, hypothetical: %d)", 
-                         alignment_error[0], alignment_error[1])
-        
-        # List of methods to exclude
-        excluded_methods = ['__init__', 'configure', 'phoneme_alignment', 'relative_sentence_duration', 'regularity_of_segments', 'alternating_regularity']
-        
-        # Iterate through all methods of the speech_behavior instance
-        self.logger.debug("Extracting speech behavior features")
-        for name, method in inspect.getmembers(speech_behavior, predicate=inspect.ismethod):
-            # Check if the method is not in the excluded list
-            if name not in excluded_methods:
-                # Invoke each method and store the result
-                s_results[name] = method()
-                
-        # Process regularity and PVI features
-        self.logger.debug("Processing regularity and PVI features")
-        for i, res in enumerate(speech_behavior.regularity_of_segments()):
-            s_results[f"regularity_{i}"] = res
-        for i, res in enumerate(speech_behavior.alternating_regularity()):
-            s_results[f"PVI_{i}"] = res
-        
-        # Process relative sentence duration
-        relative_sentence_duration = speech_behavior.relative_sentence_duration()
-        s_results.update(self.process_row(np.array(relative_sentence_duration), "relative_sentence_duration"))
-        
+        prob = {}
+
+        try:
+            # Process rhythmic features
+            pause_behavior = PauseBehavior(self.vad_model, self.vad_utils, self.transcription_model)
+            pause_behavior.configure(filepath)
+            
+            voiceProb_signal = self.vad_model.audio_forward(pause_behavior.data, sr=16000)
+            voiceProb_signal = np.array(voiceProb_signal[0])
+            prob = self.process_row(voiceProb_signal, "voiceProb")
+            
+            # List of methods to exclude
+            excluded_methods_p = ['__init__', 'configure']
+            
+            # Iterate through all methods of the pause_behavior instance
+            self.logger.debug("Extracting pause behavior features")
+            for name, method in inspect.getmembers(pause_behavior, predicate=inspect.ismethod):
+                if name not in excluded_methods_p:
+                    try:
+                        p_results[name] = method()
+                    except Exception as e_method:
+                        self.logger.error(f"Error executing PauseBehavior method {name}: {e_method}")
+            
+            # Process speech features
+            speech_behavior = SpeechBehavior(self.vad_model, self.vad_utils, self.transcription_model)
+            
+            # Copy data from pause_behavior to speech_behavior
+            speech_behavior.data = pause_behavior.data
+            speech_behavior.silence_ranges = pause_behavior.silence_ranges
+            speech_behavior.speech_ranges = pause_behavior.speech_ranges
+            speech_behavior.transcription_result = pause_behavior.transcription_result
+            speech_behavior.text = pause_behavior.text
+            
+            # Perform phoneme alignment
+            alignment_error = speech_behavior.phoneme_alignment(filepath)
+            self.logger.info("Phoneme alignment completed (total segments: %d, hypothetical: %d)", 
+                             alignment_error[0], alignment_error[1])
+            
+            # List of methods to exclude
+            excluded_methods_s = ['__init__', 'configure', 'phoneme_alignment', 'relative_sentence_duration', 'regularity_of_segments', 'alternating_regularity']
+            
+            # Iterate through all methods of the speech_behavior instance
+            self.logger.debug("Extracting speech behavior features")
+            for name, method in inspect.getmembers(speech_behavior, predicate=inspect.ismethod):
+                if name not in excluded_methods_s:
+                    try:
+                        s_results[name] = method()
+                    except Exception as e_method:
+                        self.logger.error(f"Error executing SpeechBehavior method {name}: {e_method}")
+            
+            # Process regularity and PVI features
+            self.logger.debug("Processing regularity and PVI features")
+            try:
+                for i, res in enumerate(speech_behavior.regularity_of_segments()):
+                    s_results[f"regularity_{i}"] = res
+                for i, res in enumerate(speech_behavior.alternating_regularity()):
+                    s_results[f"PVI_{i}"] = res
+            except Exception as e_reg:
+                self.logger.error(f"Error processing regularity/PVI features: {e_reg}")
+            
+            # Process relative sentence duration
+            try:
+                relative_sentence_duration = speech_behavior.relative_sentence_duration()
+                s_results.update(self.process_row(np.array(relative_sentence_duration), "relative_sentence_duration"))
+            except Exception as e_rel:
+                self.logger.error(f"Error processing relative sentence duration: {e_rel}")
+
+        except Exception as e_main:
+            self.logger.critical(f"Major error during model-based processing: {e_main}")
+            # Depending on severity, you might want to return partial results or an empty dict
+            # return {} 
+
         # Merge all results
-        p_results.update(prob)
-        self.logger.debug("Feature counts - pause: %d, speech: %d", len(p_results), len(s_results))
-        p_results.update(s_results)
+        final_results = {**p_results, **prob, **s_results}
+        self.logger.debug("Feature counts - pause: %d, prob: %d, speech: %d", len(p_results), len(prob), len(s_results))
         
-        self.logger.info("Extracted a total of %d features with VAD and transcription models", len(p_results))
-        return p_results
+        self.logger.info("Extracted a total of %d features with VAD and transcription models", len(final_results))
+        return final_results
     
     def extract_features(self, audio_paths: Union[str, List[str]], features_to_calculate: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -536,27 +927,38 @@ class AcousticFeatureExtractor:
         
         self.logger.info("Extracting features: %s", ", ".join(features_to_calculate))
         
-        # Check if feature types are valid
+        # Check if feature types are valid and available
+        requested_unavailable = []
         for feature_type in features_to_calculate:
             if feature_type not in self.available_features:
                 raise ValueError(f"Unknown feature type: {feature_type}. Available types: {list(self.available_features.keys())}")
-        
+                    
+        if requested_unavailable:
+            self.logger.warning(
+                "The following requested feature types are unavailable due to missing dependencies and will be skipped: %s",
+                ", ".join(requested_unavailable)
+            )
+
         # Process a single file
         if isinstance(audio_paths, str):
             self.logger.info("Processing single file: %s", audio_paths)
             result = {}
             
             for feature_type in features_to_calculate:
-                # If 'all' is included, extract all features and skip other types
+                # If 'all' is included, extract all available features and skip other types
                 if feature_type == 'all':
                     return self.extract_all_features(audio_paths)
                 
                 # Extract each requested feature type
-                feature_extractor = self.available_features[feature_type]
-                features = feature_extractor(audio_paths)
-                result.update(features)
+                # Add try-except around the call for robustness
+                try:
+                    feature_extractor = self.available_features[feature_type]
+                    features = feature_extractor(audio_paths)
+                    result.update(features)
+                except Exception as e:
+                    self.logger.error(f"Error during extraction of '{feature_type}' features for {audio_paths}: {e}")
             
-            self.logger.info("Extracted %d features total", len(result))
+            self.logger.info("Extracted %d features total for %s", len(result), audio_paths)
             return result
         # Process batch of files
         else:
@@ -573,9 +975,13 @@ class AcousticFeatureExtractor:
                         file_result = self.extract_all_features(audio_path)
                         break
                     
-                    feature_extractor = self.available_features[feature_type]
-                    features = feature_extractor(audio_path)
-                    file_result.update(features)
+                    # Add try-except around the call for robustness
+                    try:
+                        feature_extractor = self.available_features[feature_type]
+                        features = feature_extractor(audio_path)
+                        file_result.update(features)
+                    except Exception as e:
+                        self.logger.error(f"Error during extraction of '{feature_type}' features for {audio_path}: {e}")
                 
                 batch_results[audio_path] = file_result
             
@@ -612,8 +1018,21 @@ class AcousticFeatureExtractor:
             
         # If no specific features are requested, plot all plottable features
         if feature_names is None:
-            feature_names = [name for name, value in features.items() 
-                            if isinstance(value, (int, float, list, np.ndarray)) and value is not None]
+            # Filter out non-numeric or None values before plotting
+            plottable_features = {}
+            for name, value in features.items():
+                if isinstance(value, (int, float)) and value is not None:
+                    plottable_features[name] = value
+                elif isinstance(value, (list, np.ndarray)) and len(value) > 0:
+                    # Check if array contains numeric data
+                    try:
+                        arr = np.asarray(value)
+                        if np.issubdtype(arr.dtype, np.number):
+                            plottable_features[name] = arr
+                    except:
+                        pass # Ignore non-convertible lists/arrays
+                        
+            feature_names = list(plottable_features.keys())
             self.logger.info(f"No specific features specified. Will plot {len(feature_names)} plottable features")
         
         # Create output directory if it doesn't exist
@@ -635,53 +1054,59 @@ class AcousticFeatureExtractor:
                 try:
                     plt.figure(figsize=figsize)
                     
-                    # Check if features are time series (arrays) or scalar values
-                    if any(isinstance(features.get(name), (list, np.ndarray)) and 
-                          len(features.get(name, [])) > 1 for name in feature_chunk):
-                        # Plot time series data
-                        for name in feature_chunk:
-                            if isinstance(features.get(name), (list, np.ndarray)) and len(features.get(name, [])) > 1:
-                                data = np.array(features.get(name))
-                                plt.plot(data, label=self._get_display_name(name))
+                    # Separate time series and scalar features
+                    time_series_features = {}
+                    scalar_features = {}
+                    for name in feature_chunk:
+                        value = features.get(name)
+                        if isinstance(value, (list, np.ndarray)) and len(value) > 1:
+                            try:
+                                arr = np.asarray(value)
+                                if np.issubdtype(arr.dtype, np.number):
+                                    time_series_features[name] = arr
+                            except:
+                                pass # Ignore non-numeric arrays
+                        elif isinstance(value, (int, float)) and value is not None:
+                            scalar_features[name] = value
+
+                    # Plot time series first if any exist
+                    if time_series_features:
+                        for name, data in time_series_features.items():
+                            plt.plot(data, label=self._get_display_name(name))
                         
                         plt.xlabel('Frame Index')
                         plt.ylabel('Value')
-                        plt.title(f'{group_name} Time Series Features')
+                        plt.title(f'{group_name} Time Series Features (Plot {chunk_idx+1})')
                         plt.legend()
                         plt.grid(True, alpha=0.3)
-                    else:
-                        # Plot scalar features as bar chart
-                        valid_features = [(name, features.get(name)) for name in feature_chunk 
-                                        if features.get(name) is not None and not (
-                                            isinstance(features.get(name), (list, np.ndarray)) and 
-                                            len(features.get(name, [])) > 1
-                                        )]
-                        
-                        if not valid_features:
-                            continue
-                            
-                        names, values = zip(*valid_features)
+                    # Plot scalar features if any exist (can be on same plot or separate)
+                    elif scalar_features: # Use elif to avoid plotting scalars if time series were plotted
+                        names, values = zip(*scalar_features.items())
                         display_names = [self._get_display_name(name) for name in names]
                         
                         plt.bar(range(len(display_names)), values)
                         plt.xticks(range(len(display_names)), display_names, rotation=45, ha='right')
-                        plt.title(f'{group_name} Features')
+                        plt.title(f'{group_name} Features (Plot {chunk_idx+1})')
                         plt.tight_layout()
                         plt.grid(axis='y', alpha=0.3)
-                    
+                    else:
+                        # Skip if neither time series nor scalar features found in chunk
+                        plt.close() # Close the empty figure
+                        continue
+
                     # Save plot if output directory is provided
                     if output_dir:
-                        plot_name = f"{group_name.lower().replace(' ', '_')}_{chunk_idx+1}.png"
+                        plot_name = f"{group_name.lower().replace(' ', '_').replace('/', '_')}_{chunk_idx+1}.png"
                         plot_path = os.path.join(output_dir, plot_name)
                         plt.savefig(plot_path, dpi=100, bbox_inches='tight')
                         saved_plots.append(plot_path)
                         self.logger.info(f"Saved plot to {plot_path}")
                     
-                    plt.close()
+                    plt.close() # Close the figure after plotting/saving
                     
                 except Exception as e:
-                    self.logger.error(f"Error plotting {group_name} features: {str(e)}")
-                    plt.close()
+                    self.logger.error(f"Error plotting {group_name} features (chunk {chunk_idx+1}): {str(e)}")
+                    plt.close() # Ensure figure is closed on error
         
         return saved_plots
     
@@ -702,91 +1127,137 @@ class AcousticFeatureExtractor:
         groups = {}
         
         # Define common feature prefixes and their corresponding groups
+        # More specific prefixes first
         prefix_groups = {
+            'LOG_MEL_SPECTROGRAM': 'Spectral/Mel',
+            'MFCC': 'Spectral/Cepstral',
+            'LPCC': 'Spectral/Cepstral',
+            'LPC': 'Spectral/LPC',
+            'LSP': 'Spectral/LSP',
+            'PLP': 'Spectral/PLP',
             'F0': 'Pitch',
             'F1': 'Formants',
             'F2': 'Formants',
             'F3': 'Formants',
-            'MSC': 'Spectral',
-            'MFCC': 'Spectral',
-            'LPC': 'Spectral',
-            'LPCC': 'Spectral',
-            'ENVELOPE': 'Spectral',
-            'LOG_MEL_SPECTROGRAM': 'Spectral',
-            'CENTRIODS': 'Spectral',
-            'LTAS': 'Spectral',
-            'CPP': 'Voice Quality',
-            'APQ': 'Voice Quality',
-            'SHIMMER': 'Voice Quality',
-            'HNR': 'Voice Quality',
-            'NHR': 'Voice Quality',
-            'HARMONICITY': 'Voice Quality',
-            'ALPHA_RATIO': 'Voice Quality',
-            'HAMMARBERG_INDEX': 'Voice Quality',
-            'RMS': 'Intensity',
-            'INTENSITY': 'Intensity',
-            'SPL': 'Intensity',
-            'PEAK': 'Intensity',
-            'STE': 'Intensity',
-            'Amplitude_Range': 'Intensity',
+            'Jitter': 'Voice Quality/Perturbation',
+            'Shimmer': 'Voice Quality/Perturbation',
+            'APQ': 'Voice Quality/Perturbation',
+            'HNR': 'Voice Quality/Harmonicity',
+            'NHR': 'Voice Quality/Harmonicity',
+            'HARMONICITY': 'Voice Quality/Harmonicity',
+            'CPP': 'Voice Quality/CPP',
+            'HAMMARBERG_INDEX': 'Voice Quality/Spectral Tilt',
+            'ALPHA_RATIO': 'Voice Quality/Spectral Tilt',
+            'MSC': 'Spectral/Modulation',
+            'CENTRIODS': 'Spectral/Shape',
+            'LTAS': 'Spectral/Shape',
+            'ENVELOPE': 'Spectral/Shape',
+            'RMS': 'Intensity/Amplitude',
+            'PEAK': 'Intensity/Amplitude',
+            'Amplitude_Range': 'Intensity/Amplitude',
+            'SPL': 'Intensity/SPL',
+            'STE': 'Intensity/Energy',
+            'INTENSITY': 'Intensity/Energy',
             'HFD': 'Complexity',
             'FREQ_ENTROPY': 'Complexity',
             'AMP_ENTROPY': 'Complexity',
             'ZCR': 'Complexity',
-            'Jitter': 'Voice Quality',
-            'PLP': 'Spectral',
-            'LSP': 'Spectral',
             'voiceProb': 'Speech Activity',
-            'relative_sentence_duration': 'Speech Fluency',
-            'regularity': 'Speech Fluency',
-            'PVI': 'Speech Fluency'
+            'relative_sentence_duration': 'Speech Fluency/Timing',
+            'regularity': 'Speech Fluency/Regularity',
+            'PVI': 'Speech Fluency/Regularity'
+            # Add more specific groups as needed
         }
         
         # Assign each feature to a group
         for name in feature_names:
             assigned = False
+            # Check specific prefixes first
             for prefix, group in prefix_groups.items():
-                if name.startswith(prefix) or f'_{prefix}' in name:
+                # Match start or common statistical patterns
+                if name.startswith(prefix) or \
+                   f'_{prefix}_sma' in name or \
+                   f'_{prefix}_de' in name:
                     if group not in groups:
                         groups[group] = []
                     groups[group].append(name)
                     assigned = True
                     break
             
+            # Assign to broader category if no specific match
             if not assigned:
-                if 'Other' not in groups:
-                    groups['Other'] = []
-                groups['Other'].append(name)
+                broad_category = 'Other'
+                if 'spectral' in name.lower() or 'spec' in name.lower(): broad_category = 'Spectral/Other'
+                elif 'voice' in name.lower() or 'hnr' in name.lower() or 'jitter' in name.lower() or 'shimmer' in name.lower(): broad_category = 'Voice Quality/Other'
+                elif 'freq' in name.lower() or 'pitch' in name.lower() or 'formant' in name.lower(): broad_category = 'Frequency/Other'
+                elif 'intens' in name.lower() or 'loud' in name.lower() or 'amp' in name.lower() or 'spl' in name.lower() or 'peak' in name.lower() or 'rms' in name.lower(): broad_category = 'Intensity/Other'
+                elif 'complex' in name.lower() or 'entropy' in name.lower() or 'hfd' in name.lower(): broad_category = 'Complexity/Other'
+                elif 'fluency' in name.lower() or 'rhythm' in name.lower() or 'pause' in name.lower() or 'speech' in name.lower(): broad_category = 'Timing/Fluency/Other'
+                
+                if broad_category not in groups:
+                    groups[broad_category] = []
+                groups[broad_category].append(name)
         
         return groups
     
     def _get_display_name(self, feature_name: str) -> str:
         """
-        Convert a feature name to a more readable display name
+        Convert a feature name to a more readable display name for plots.
+        Removes statistical suffixes and shortens long names.
         
         Parameters:
-        -----------
+        ----------
         feature_name : str
-            Original feature name
+            Original feature name (e.g., 'F0_sma_amean', 'MFCC[5]_sma_stddev')
             
         Returns:
         --------
         str
-            Shortened and more readable display name
+            Shortened and more readable display name (e.g., 'F0', 'MFCC[5]')
         """
-        # Remove common statistical suffixes
-        for suffix in ['_sma_amean', '_sma_stddev', '_sma_max', '_sma_min']:
-            if feature_name.endswith(suffix):
-                return feature_name.replace(suffix, '')
+        # Define common statistical function names used as suffixes
+        stat_suffixes = [
+            '_sma', '_de', '_max', '_min', '_span', '_maxPos', '_minPos', '_amean',
+            '_linregc1', '_linregc2', '_linregerrA', '_linregerrQ', '_stddev',
+            '_skewness', '_kurtosis', '_quartile1', '_quartile2', '_quartile3',
+            '_iqr1_2', '_iqr2_3', '_iqr1_3', '_percentile1', '_percentile99',
+            '_pctlrange0_1', '_upleveltime75', '_upleveltime90'
+        ]
         
-        # Shorten matrix indices
-        if '[' in feature_name and ']' in feature_name:
-            base, rest = feature_name.split('[', 1)
-            idx, stat = rest.split(']_', 1)
-            return f"{base}[{idx}]"
+        name_part = feature_name
         
-        # Limit length
-        if len(feature_name) > 30:
-            return feature_name[:27] + '...'
+        # Iteratively remove known suffixes
+        removed_suffix = True
+        while removed_suffix:
+            removed_suffix = False
+            for suffix in stat_suffixes:
+                # Check if the name_part ends with this specific suffix
+                if name_part.endswith(suffix):
+                    # Check if it's preceded by an underscore or another suffix component
+                    # Avoid removing 'sma' from 'sma[0]_max'
+                    prefix_part = name_part[:-len(suffix)]
+                    if prefix_part.endswith('_') or any(prefix_part.endswith(sfx) for sfx in stat_suffixes):
+                        name_part = prefix_part
+                        removed_suffix = True
+                        break # Restart check with the shortened name
+        
+        # Special handling for suffixes like _sma[index]_funcname or _sma_de[index]_funcname
+        import re
+        match = re.match(r"^(.*?)_sma(?:_de)?\[\d+\]_([a-zA-Z0-9_]+)$", name_part)
+        if match:
+            base_name = match.group(1)
+            # Extract the [index] part carefully
+            index_match = re.search(r'\[\d+\]', feature_name) 
+            index_part = index_match.group(0) if index_match else ''
+            name_part = f"{base_name}{index_part}"
+        else:
+             # Simpler check if the previous complex regex didn't match - keep index if present
+             match = re.match(r"^(.*?)\[\d+\]$", name_part)
+             if match:
+                 name_part = match.group(0) # Keep the index part like MFCC[5]
+
+        # Limit length if still too long
+        if len(name_part) > 25:
+            return name_part[:22] + '...'
             
-        return feature_name 
+        return name_part.replace('_', ' ') # Replace remaining underscores for readability 

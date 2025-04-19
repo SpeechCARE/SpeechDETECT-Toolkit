@@ -7,7 +7,7 @@ from scipy.signal import find_peaks, periodogram
 from scipy.io import wavfile
 from scipy.linalg import solve_toeplitz
 from spafe.fbanks import mel_fbanks, bark_fbanks
-from utils import frame_signal, freq2mel, mel2freq, lifter_ceps, Preprocessing, poly2lsf, stft
+from .utils import frame_signal, freq2mel, mel2freq, lifter_ceps, preprocess_audio, poly2lsf, stft
 
 
 def amplitude_range(data, fs, window_length_ms, window_step_ms, windowing_function="hamming"):
@@ -244,7 +244,7 @@ def hammIndex(x, fs):
     f1, f2 = 2000, 5000
     
     # Assuming Preprocessing is imported from helper
-    norm_signal = Preprocessing(fs, x)
+    norm_signal = preprocess_audio(fs, x)
     
     fq, Pxx = scipy.signal.welch(norm_signal, fs, nperseg=2048)
     Pxx_dB = 10 * np.log10(Pxx + 1e-12)
