@@ -10,7 +10,7 @@ NAME = "speechdetect"
 DESCRIPTION = "Comprehensive acoustic feature extraction tool for speech analysis"
 URL = "https://github.com/SpeechCARE/SpeechDETECT-toolkit"
 EMAIL = "sinarashidi46@gmail.com"
-AUTHOR = "SpeechCARE team"
+AUTHOR = "SpeechCARE team (Sina Rashidi)"
 REQUIRES_PYTHON = ">=3.8.0"
 VERSION = "0.1.0"
 
