@@ -1,41 +1,183 @@
-# SpeechDETECT: Speech Analysis Pipeline
+# SpeechDETECT: Acoustic Feature Extraction for Speech Analysis
 
 ## Overview
-This is the repo of "SpeechDETECT: An Explainable Automated Speech Processing Tool for Early Detection of Cognitive ImpAiRmEnt".
-This study developed a comprehensive acoustic parameter set tailored to detect speech cues indicative of cognitive impairment. This set evaluates the vocal component across eight domains representing *vocal traits*—including Frequency Parameters, Cepstral Coefficients and Spectral Features, Voice Quality, Loudness, Intensity, and Speech Signal Complexity—and *speech temporal aspects*, including Speech Fluency, Rhythmic Structure, and Speech Production Dynamics. We assessed the effectiveness SpeechCARE using the DementiaBank dataset, a recognized benchmark that contains audio recordings from the "Cookie-Theft" picture-description task. Our evaluations, conducted with a machine learning classifier, revealed that Voice-Mark MCI offers significant insights into speech-related cognitive impairments, enhancing early detection strategies for patients at risk of ADRD.
 
+SpeechDETECT is a comprehensive acoustic feature extraction tool for speech analysis. It extracts a wide range of acoustic parameters across multiple domains:
 
-## Dataset
+- **Vocal Traits**
+  - Frequency Parameters (pitch, jitter, formants)
+  - Spectral Features (MFCC, LPC, spectral envelope)
+  - Voice Quality (shimmer, HNR, APQ)
+  - Loudness and Intensity
+  - Speech Signal Complexity
 
-We measured the performance of SpeechDETECT using the DementiaBank speech corpus, which includes recordings from 237 subjects who participated in a picture description task. The subjects comprised 122 cognitively impaired and 115 cognitively normal individuals. The dataset was split into training and testing sets with the following characteristics:
+- **Temporal Aspects**
+  - Speech Fluency
+  - Rhythmic Structure
+  - Speech Production Dynamics
 
-#### Training Data
+## Installation
 
-| Attributes                        | Case Group     | Control Group    |
-|-----------------------------------|----------------|------------------|
-| Participants                      | 87             | 79               |
-| Gender (F/M)                      | 58 / 29        | 52 / 27          |
-| Age (mean ± std)                  | 69.72 ± 6.80   | 66.04 ± 6.25     |
-| MMSE score (mean ± std)           | 17.44 ± 5.33   | 28.99 ± 1.15     |
+There are two ways to install SpeechDETECT:
 
-#### Testing Data
+### Option 1: Install from GitHub
 
-| Attributes                        | Case Group     | Control Group    |
-|-----------------------------------|----------------|------------------|
-| Participants                      | 35             | 36               |
-| Gender (F/M)                      | 21 / 14        | 23 / 13          |
-| Age (mean ± std)                  | 68.51 ± 7.12   | 66.11 ± 6.53     |
-| MMSE score (mean ± std)           | 18.86 ± 5.80   | 28.91 ± 1.25     |
+```bash
+pip install git+https://github.com/SpeechCARE/SpeechDETECT-toolkit.git
+```
 
+### Option 2: Manual Installation
 
-## Results
-The performance of all machine learning classifiers, following hyperparameter optimization using 5-fold cross-validation, is reported in the following table, based on their evaluation on the test set:
+```bash
+git clone https://github.com/SpeechCARE/SpeechDETECT-toolkit.git
+cd SpeechDETECT-toolkit
+pip install -e .
+```
 
-ML classifier          |	F1-score      | 	AUC-ROC |
-|----------------------|----------------|-----------|
-|Random Forest          |	63.88        	|71.58      |
-|Extra Trees	|60.52	|65.39 |
-|AdaBoost	| 68.85 |	75.55 |
-|XGBoost	| 60.60	| 62.22 |
-|SVM	| 71.23	| 77.93 |
-|**MLP**	| **80.5**	| **79.65** |]
+## Usage Examples
+
+### Basic Feature Extraction
+
+```python
+from speechdetect import AcousticFeatureExtractor
+
+# Initialize the feature extractor
+extractor = AcousticFeatureExtractor(sampling_rate=16000)
+
+# Extract all available features from an audio file
+features = extractor.extract_all_features("path/to/audio.wav")
+print(f"Extracted {len(features)} features")
+
+# Extract specific feature types
+spectral_features = extractor.extract_features(
+    "path/to/audio.wav", 
+    features_to_calculate=["spectral", "complexity"]
+)
+```
+
+### Batch Processing
+
+```python
+# Process multiple files
+audio_files = [
+    "path/to/file1.wav",
+    "path/to/file2.wav",
+    "path/to/file3.wav"
+]
+
+# Extract selected feature types for all files
+results = extractor.extract_features(
+    audio_files,
+    features_to_calculate=["frequency", "voice_quality", "intensity"]
+)
+
+# Access results for a specific file
+file1_features = results["path/to/file1.wav"]
+```
+
+### Visualizing Features
+
+```python
+import os
+
+# Extract features
+features = extractor.extract_all_features("path/to/audio.wav")
+
+# Create a directory for plots
+os.makedirs("feature_plots", exist_ok=True)
+
+# Plot all features and save to directory
+plot_paths = extractor.plot_features(features, output_dir="feature_plots")
+
+# Plot specific features
+selected_features = [
+    "F0_sma_amean",         # Mean pitch
+    "INTENSITY_sma_max",    # Maximum intensity
+    "HNR_sma_amean",        # Mean harmonics-to-noise ratio
+    "SHIMMER_sma_amean"     # Mean shimmer
+]
+extractor.plot_features(
+    features, 
+    feature_names=selected_features, 
+    output_dir="feature_plots/selected"
+)
+```
+
+### Advanced Usage with Voice Activity Detection
+
+```python
+# For transcription-based features, you need to set up models first
+# This example assumes you have VAD and transcription models
+from your_vad_library import VADModel, VADUtils
+from your_transcription_library import TranscriptionModel
+
+# Initialize models
+vad_model = VADModel()
+vad_utils = VADUtils()
+transcription_model = TranscriptionModel()
+
+# Set models in the extractor
+extractor.set_models(
+    vad_model=vad_model,
+    vad_utils=vad_utils,
+    transcription_model=transcription_model
+)
+
+# Extract transcription-based features
+transcription_features = extractor.extract_features(
+    "path/to/audio.wav",
+    features_to_calculate=["transcription"]
+)
+```
+
+## Logging
+
+SpeechDETECT uses Python's logging framework. You can configure the logging level:
+
+```python
+import logging
+
+# Configure logging at the application level
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Or set the level specifically for the extractor
+extractor = AcousticFeatureExtractor(log_level=logging.DEBUG)
+```
+
+## Available Feature Types
+
+The extractor supports the following feature types:
+
+- `spectral`: Cepstral coefficients and spectral features
+- `complexity`: Speech signal complexity features
+- `frequency`: Frequency and pitch-related parameters
+- `intensity`: Loudness and intensity features
+- `rhythmic`: Rhythmic structure parameters
+- `fluency`: Speech fluency features
+- `voice_quality`: Voice quality metrics
+- `all`: All available features
+- `raw`: Raw acoustic features
+- `transcription`: Features requiring VAD and transcription models
+
+## Saving and Loading Features
+
+```python
+import pandas as pd
+
+# Extract features
+features = extractor.extract_all_features("path/to/audio.wav")
+
+# Save features to CSV
+df = pd.DataFrame([features])
+df.to_csv("features.csv", index=False)
+
+# Load features from CSV
+loaded_features = pd.read_csv("features.csv").iloc[0].to_dict()
+```
+
+## License
+
+[License information]

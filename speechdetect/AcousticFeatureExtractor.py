@@ -7,7 +7,9 @@ import numpy as np
 import inspect
 import librosa
 import logging
-from typing import List, Dict, Union, Any, Optional, Tuple
+import matplotlib.pyplot as plt
+from typing import List, Dict, Union, Any, Optional, Tuple, Set
+from pathlib import Path
 
 # Import from the acoustic_features package
 from acoustic_features import (
@@ -578,4 +580,213 @@ class AcousticFeatureExtractor:
                 batch_results[audio_path] = file_result
             
             self.logger.info("Batch processing complete")
-            return batch_results 
+            return batch_results
+    
+    def plot_features(self, features: Dict[str, Any], feature_names: Optional[List[str]] = None, 
+                     output_dir: Optional[str] = None, figsize: Tuple[int, int] = (12, 6),
+                     max_features_per_plot: int = 5) -> List[str]:
+        """
+        Plot selected features and optionally save the plots to an output directory
+        
+        Parameters:
+        -----------
+        features : Dict[str, Any]
+            Dictionary containing extracted features
+        feature_names : List[str], optional
+            List of feature names to plot. If None, will attempt to plot all plottable features
+        output_dir : str, optional
+            Directory to save plots. If None, plots will only be displayed
+        figsize : Tuple[int, int], optional
+            Figure size for plots (width, height) in inches
+        max_features_per_plot : int, optional
+            Maximum number of features to include in a single plot
+            
+        Returns:
+        --------
+        List[str]
+            List of file paths to saved plots (if output_dir is provided) or empty list otherwise
+        """
+        if not features:
+            self.logger.warning("No features provided for plotting")
+            return []
+            
+        # If no specific features are requested, plot all plottable features
+        if feature_names is None:
+            feature_names = [name for name, value in features.items() 
+                            if isinstance(value, (int, float, list, np.ndarray)) and value is not None]
+            self.logger.info(f"No specific features specified. Will plot {len(feature_names)} plottable features")
+        
+        # Create output directory if it doesn't exist
+        if output_dir:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            self.logger.info(f"Plots will be saved to directory: {output_dir}")
+            
+        saved_plots = []
+        
+        # Group features by their category
+        feature_groups = self._group_features(feature_names)
+        
+        for group_name, group_features in feature_groups.items():
+            # Split into manageable chunks if there are too many features
+            feature_chunks = [group_features[i:i+max_features_per_plot] 
+                             for i in range(0, len(group_features), max_features_per_plot)]
+            
+            for chunk_idx, feature_chunk in enumerate(feature_chunks):
+                try:
+                    plt.figure(figsize=figsize)
+                    
+                    # Check if features are time series (arrays) or scalar values
+                    if any(isinstance(features.get(name), (list, np.ndarray)) and 
+                          len(features.get(name, [])) > 1 for name in feature_chunk):
+                        # Plot time series data
+                        for name in feature_chunk:
+                            if isinstance(features.get(name), (list, np.ndarray)) and len(features.get(name, [])) > 1:
+                                data = np.array(features.get(name))
+                                plt.plot(data, label=self._get_display_name(name))
+                        
+                        plt.xlabel('Frame Index')
+                        plt.ylabel('Value')
+                        plt.title(f'{group_name} Time Series Features')
+                        plt.legend()
+                        plt.grid(True, alpha=0.3)
+                    else:
+                        # Plot scalar features as bar chart
+                        valid_features = [(name, features.get(name)) for name in feature_chunk 
+                                        if features.get(name) is not None and not (
+                                            isinstance(features.get(name), (list, np.ndarray)) and 
+                                            len(features.get(name, [])) > 1
+                                        )]
+                        
+                        if not valid_features:
+                            continue
+                            
+                        names, values = zip(*valid_features)
+                        display_names = [self._get_display_name(name) for name in names]
+                        
+                        plt.bar(range(len(display_names)), values)
+                        plt.xticks(range(len(display_names)), display_names, rotation=45, ha='right')
+                        plt.title(f'{group_name} Features')
+                        plt.tight_layout()
+                        plt.grid(axis='y', alpha=0.3)
+                    
+                    # Save plot if output directory is provided
+                    if output_dir:
+                        plot_name = f"{group_name.lower().replace(' ', '_')}_{chunk_idx+1}.png"
+                        plot_path = os.path.join(output_dir, plot_name)
+                        plt.savefig(plot_path, dpi=100, bbox_inches='tight')
+                        saved_plots.append(plot_path)
+                        self.logger.info(f"Saved plot to {plot_path}")
+                    
+                    plt.close()
+                    
+                except Exception as e:
+                    self.logger.error(f"Error plotting {group_name} features: {str(e)}")
+                    plt.close()
+        
+        return saved_plots
+    
+    def _group_features(self, feature_names: List[str]) -> Dict[str, List[str]]:
+        """
+        Group features by their category based on name patterns
+        
+        Parameters:
+        -----------
+        feature_names : List[str]
+            List of feature names to group
+            
+        Returns:
+        --------
+        Dict[str, List[str]]
+            Dictionary mapping category names to lists of feature names
+        """
+        groups = {}
+        
+        # Define common feature prefixes and their corresponding groups
+        prefix_groups = {
+            'F0': 'Pitch',
+            'F1': 'Formants',
+            'F2': 'Formants',
+            'F3': 'Formants',
+            'MSC': 'Spectral',
+            'MFCC': 'Spectral',
+            'LPC': 'Spectral',
+            'LPCC': 'Spectral',
+            'ENVELOPE': 'Spectral',
+            'LOG_MEL_SPECTROGRAM': 'Spectral',
+            'CENTRIODS': 'Spectral',
+            'LTAS': 'Spectral',
+            'CPP': 'Voice Quality',
+            'APQ': 'Voice Quality',
+            'SHIMMER': 'Voice Quality',
+            'HNR': 'Voice Quality',
+            'NHR': 'Voice Quality',
+            'HARMONICITY': 'Voice Quality',
+            'ALPHA_RATIO': 'Voice Quality',
+            'HAMMARBERG_INDEX': 'Voice Quality',
+            'RMS': 'Intensity',
+            'INTENSITY': 'Intensity',
+            'SPL': 'Intensity',
+            'PEAK': 'Intensity',
+            'STE': 'Intensity',
+            'Amplitude_Range': 'Intensity',
+            'HFD': 'Complexity',
+            'FREQ_ENTROPY': 'Complexity',
+            'AMP_ENTROPY': 'Complexity',
+            'ZCR': 'Complexity',
+            'Jitter': 'Voice Quality',
+            'PLP': 'Spectral',
+            'LSP': 'Spectral',
+            'voiceProb': 'Speech Activity',
+            'relative_sentence_duration': 'Speech Fluency',
+            'regularity': 'Speech Fluency',
+            'PVI': 'Speech Fluency'
+        }
+        
+        # Assign each feature to a group
+        for name in feature_names:
+            assigned = False
+            for prefix, group in prefix_groups.items():
+                if name.startswith(prefix) or f'_{prefix}' in name:
+                    if group not in groups:
+                        groups[group] = []
+                    groups[group].append(name)
+                    assigned = True
+                    break
+            
+            if not assigned:
+                if 'Other' not in groups:
+                    groups['Other'] = []
+                groups['Other'].append(name)
+        
+        return groups
+    
+    def _get_display_name(self, feature_name: str) -> str:
+        """
+        Convert a feature name to a more readable display name
+        
+        Parameters:
+        -----------
+        feature_name : str
+            Original feature name
+            
+        Returns:
+        --------
+        str
+            Shortened and more readable display name
+        """
+        # Remove common statistical suffixes
+        for suffix in ['_sma_amean', '_sma_stddev', '_sma_max', '_sma_min']:
+            if feature_name.endswith(suffix):
+                return feature_name.replace(suffix, '')
+        
+        # Shorten matrix indices
+        if '[' in feature_name and ']' in feature_name:
+            base, rest = feature_name.split('[', 1)
+            idx, stat = rest.split(']_', 1)
+            return f"{base}[{idx}]"
+        
+        # Limit length
+        if len(feature_name) > 30:
+            return feature_name[:27] + '...'
+            
+        return feature_name 
