@@ -102,6 +102,22 @@ file1_grouped_features = grouped_results["path/to/file1.wav"]
 voice_quality_features = file1_grouped_features.get("Voice Quality/Perturbation", {})
 ```
 
+## Available Feature Types
+
+The extractor supports the following feature types:
+
+- `spectral`: Cepstral coefficients and spectral features
+- `complexity`: Speech signal complexity features
+- `frequency`: Frequency and pitch-related parameters
+- `intensity`: Loudness and intensity features
+- `rhythmic`: Rhythmic structure parameters
+- `fluency`: Speech fluency features
+- `voice_quality`: Voice quality metrics
+- `all`: All available features
+- `raw`: Raw acoustic features
+- `transcription`: Features requiring VAD and transcription models
+
+
 ### Advanced Usage with Voice Activity Detection
 
 ```python
@@ -149,21 +165,6 @@ logging.basicConfig(
 extractor = AcousticFeatureExtractor(log_level=logging.DEBUG)
 ```
 
-## Available Feature Types
-
-The extractor supports the following feature types:
-
-- `spectral`: Cepstral coefficients and spectral features
-- `complexity`: Speech signal complexity features
-- `frequency`: Frequency and pitch-related parameters
-- `intensity`: Loudness and intensity features
-- `rhythmic`: Rhythmic structure parameters
-- `fluency`: Speech fluency features
-- `voice_quality`: Voice quality metrics
-- `all`: All available features
-- `raw`: Raw acoustic features
-- `transcription`: Features requiring VAD and transcription models
-
 ## Saving and Loading Features
 
 ```python
@@ -179,7 +180,3 @@ df.to_csv("features.csv", index=False)
 # Load features from CSV
 loaded_features = pd.read_csv("features.csv").iloc[0].to_dict()
 ```
-
-## License
-
-[License information]

@@ -983,6 +983,7 @@ class AcousticFeatureExtractor:
             
             # If separate_groups is True, organize features by group
             if separate_groups and result:
+                self.logger.info("Extracted %d features total for %s", len(result), audio_paths)
                 grouped_result = self._organize_features_by_group(result)
                 self.logger.info("Extracted features organized into %d groups for %s", len(grouped_result), audio_paths)
                 return grouped_result
@@ -1014,6 +1015,7 @@ class AcousticFeatureExtractor:
                 
                 # If separate_groups is True, organize features by group for each file
                 if separate_groups and file_result:
+                    self.logger.info("Extracted %d features total for %s", len(file_result), audio_path)
                     grouped_file_result = self._organize_features_by_group(file_result)
                     batch_results[audio_path] = grouped_file_result
                 else:
