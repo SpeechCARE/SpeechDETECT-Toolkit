@@ -78,7 +78,7 @@ audio_files = [
     "path/to/file1.wav",
     "path/to/file2.wav",
     "path/to/file3.wav"
-]
+] # or a pytorch dataloader with paths of audio files
 
 # Extract selected feature types for all files
 results = extractor.extract_features(
