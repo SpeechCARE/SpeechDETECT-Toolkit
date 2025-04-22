@@ -44,15 +44,30 @@ from speechdetect import AcousticFeatureExtractor
 # Initialize the feature extractor
 extractor = AcousticFeatureExtractor(sampling_rate=16000)
 
-# Extract all available features from an audio file
-features = extractor.extract_all_features("path/to/audio.wav")
-print(f"Extracted {len(features)} features")
-
-# Extract specific feature types
-spectral_features = extractor.extract_features(
+# Extract features with detailed options
+features = extractor.extract_features(
     "path/to/audio.wav", 
-    features_to_calculate=["spectral", "complexity"]
+    features_to_calculate=[
+        "spectral",     # Cepstral coefficients and spectral features (MFCC, LPC, etc.)
+        "complexity",   # Signal complexity metrics (entropy, fractal dimension)
+        "frequency",    # Pitch and formant features (F0, jitter, formants)
+        "intensity",    # Loudness and amplitude features (RMS, SPL, etc.)
+        "voice_quality" # Voice quality metrics (shimmer, HNR, etc.)
+        # Other options: "rhythmic", "fluency", "transcription", "all", "raw"
+    ],
+    separate_groups=False  # Set to True to organize output by feature categories
 )
+
+# Extract all available features and organize by feature groups
+grouped_features = extractor.extract_features(
+    "path/to/audio.wav", 
+    features_to_calculate=["all"],
+    separate_groups=True  # Results will be organized by feature categories
+)
+
+# Accessing features when separate_groups=True
+mel_features = grouped_features["Spectral/Mel"]
+print(mel_features)
 ```
 
 ### Batch Processing
@@ -68,39 +83,23 @@ audio_files = [
 # Extract selected feature types for all files
 results = extractor.extract_features(
     audio_files,
-    features_to_calculate=["frequency", "voice_quality", "intensity"]
+    features_to_calculate=["frequency", "voice_quality", "intensity"],
+    separate_groups=False  # Default: flat dictionary of features
 )
 
 # Access results for a specific file
 file1_features = results["path/to/file1.wav"]
-```
 
-### Visualizing Features
-
-```python
-import os
-
-# Extract features
-features = extractor.extract_all_features("path/to/audio.wav")
-
-# Create a directory for plots
-os.makedirs("feature_plots", exist_ok=True)
-
-# Plot all features and save to directory
-plot_paths = extractor.plot_features(features, output_dir="feature_plots")
-
-# Plot specific features
-selected_features = [
-    "F0_sma_amean",         # Mean pitch
-    "INTENSITY_sma_max",    # Maximum intensity
-    "HNR_sma_amean",        # Mean harmonics-to-noise ratio
-    "SHIMMER_sma_amean"     # Mean shimmer
-]
-extractor.plot_features(
-    features, 
-    feature_names=selected_features, 
-    output_dir="feature_plots/selected"
+# Process files with grouped features
+grouped_results = extractor.extract_features(
+    audio_files,
+    features_to_calculate=["frequency", "voice_quality", "intensity"],
+    separate_groups=True  # Features organized by categories
 )
+
+# Access grouped results for a specific file
+file1_grouped_features = grouped_results["path/to/file1.wav"]
+voice_quality_features = file1_grouped_features.get("Voice Quality/Perturbation", {})
 ```
 
 ### Advanced Usage with Voice Activity Detection
@@ -108,13 +107,16 @@ extractor.plot_features(
 ```python
 # For transcription-based features, you need to set up models first
 # This example assumes you have VAD and transcription models
-from your_vad_library import VADModel, VADUtils
-from your_transcription_library import TranscriptionModel
+import torch
+import whisperx
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Initialize models
-vad_model = VADModel()
-vad_utils = VADUtils()
-transcription_model = TranscriptionModel()
+vad_model, vad_utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
+                              model='silero_vad',
+                              force_reload=True)
+transcription_model = whisperx.load_model("large-v3", device, compute_type="int8")
 
 # Set models in the extractor
 extractor.set_models(
