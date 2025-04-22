@@ -281,8 +281,16 @@ class AcousticFeatureExtractor:
                 
                 # Formants (F1, F2, F3)
                 F_formants = get_formants_frame_based(data, fs, window_length_ms, window_step_ms, [1, 2, 3])
-                for i in range(F_formants.shape[0]):
-                    features.update(self.process_row(F_formants[i, :], f'F{i+1}'))
+                # Handle the case where F_formants is returned as a tuple
+                if isinstance(F_formants, tuple):
+                    # Extract the formant data from the tuple (first element is usually the formant data)
+                    formant_data = np.array(F_formants[0])
+                else:
+                    formant_data = F_formants
+                
+                # Process each formant
+                for i in range(formant_data.shape[0]):
+                    features.update(self.process_row(formant_data[i, :], f'F{i+1}'))
                 
                 # Harmonicity can also be considered a frequency feature
                 HARMONICITY = harmonicity(data, fs)
@@ -675,8 +683,16 @@ class AcousticFeatureExtractor:
             features.update(self.process_row(np.array(jitter), 'Jitter'))
             
             F_formants = get_formants_frame_based(data, fs, window_length_ms, window_step_ms, [1, 2, 3])
-            for i in range(F_formants.shape[0]):
-                features.update(self.process_row(F_formants[i, :], f'F{i+1}'))
+            # Handle the case where F_formants is returned as a tuple
+            if isinstance(F_formants, tuple):
+                # Extract the formant data from the tuple (first element is usually the formant data)
+                formant_data = np.array(F_formants[0])
+            else:
+                formant_data = F_formants
+                
+            # Process each formant
+            for i in range(formant_data.shape[0]):
+                features.update(self.process_row(formant_data[i, :], f'F{i+1}'))
             self.logger.info("Processed frequency parameters")
         except Exception as e:
             self.logger.error(f"Error processing frequency parameters: {e}")
@@ -900,7 +916,7 @@ class AcousticFeatureExtractor:
         self.logger.info("Extracted a total of %d features with VAD and transcription models", len(final_results))
         return final_results
     
-    def extract_features(self, audio_paths: Union[str, List[str]], features_to_calculate: Optional[List[str]] = None) -> Dict[str, Any]:
+    def extract_features(self, audio_paths: Union[str, List[str]], features_to_calculate: Optional[List[str]] = None, separate_groups: bool = False) -> Dict[str, Any]:
         """
         Extract specified features from a single audio file or a batch of files
         
@@ -913,13 +929,19 @@ class AcousticFeatureExtractor:
             Valid options: 'spectral', 'complexity', 'frequency', 'intensity', 
                           'rhythmic', 'fluency', 'voice_quality', 'all',
                           'raw', 'transcription'
+        separate_groups : bool, optional
+            If True, organizes output by feature groups. If False (default), returns a flat dictionary.
             
         Returns:
         --------
         dict
             Dictionary containing extracted features
-            For a single file: {feature_name: feature_value, ...}
-            For multiple files: {file_path: {feature_name: feature_value, ...}, ...}
+            If separate_groups=False (default):
+                For a single file: {feature_name: feature_value, ...}
+                For multiple files: {file_path: {feature_name: feature_value, ...}, ...}
+            If separate_groups=True:
+                For a single file: {feature_group: {feature_name: feature_value, ...}, ...}
+                For multiple files: {file_path: {feature_group: {feature_name: feature_value, ...}, ...}, ...}
         """
         # Default to all features if none specified
         if features_to_calculate is None:
@@ -947,7 +969,8 @@ class AcousticFeatureExtractor:
             for feature_type in features_to_calculate:
                 # If 'all' is included, extract all available features and skip other types
                 if feature_type == 'all':
-                    return self.extract_all_features(audio_paths)
+                    result = self.extract_all_features(audio_paths)
+                    break
                 
                 # Extract each requested feature type
                 # Add try-except around the call for robustness
@@ -957,6 +980,12 @@ class AcousticFeatureExtractor:
                     result.update(features)
                 except Exception as e:
                     self.logger.error(f"Error during extraction of '{feature_type}' features for {audio_paths}: {e}")
+            
+            # If separate_groups is True, organize features by group
+            if separate_groups and result:
+                grouped_result = self._organize_features_by_group(result)
+                self.logger.info("Extracted features organized into %d groups for %s", len(grouped_result), audio_paths)
+                return grouped_result
             
             self.logger.info("Extracted %d features total for %s", len(result), audio_paths)
             return result
@@ -983,10 +1012,59 @@ class AcousticFeatureExtractor:
                     except Exception as e:
                         self.logger.error(f"Error during extraction of '{feature_type}' features for {audio_path}: {e}")
                 
-                batch_results[audio_path] = file_result
+                # If separate_groups is True, organize features by group for each file
+                if separate_groups and file_result:
+                    grouped_file_result = self._organize_features_by_group(file_result)
+                    batch_results[audio_path] = grouped_file_result
+                else:
+                    batch_results[audio_path] = file_result
             
             self.logger.info("Batch processing complete")
             return batch_results
+            
+    def _organize_features_by_group(self, features: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """
+        Organize features by their group
+        
+        Parameters:
+        -----------
+        features : Dict[str, Any]
+            Dictionary of features
+            
+        Returns:
+        --------
+        Dict[str, Dict[str, Any]]
+            Dictionary of features organized by group
+        """
+        if not features:
+            return {}
+            
+        # Group features by their category
+        feature_groups = self._group_features(list(features.keys()))
+        
+        # Create output dictionary organized by groups
+        grouped_features = {}
+        
+        for group_name, feature_names in feature_groups.items():
+            group_dict = {}
+            for name in feature_names:
+                if name in features:
+                    group_dict[name] = features[name]
+            
+            if group_dict:  # Only include groups with features
+                grouped_features[group_name] = group_dict
+        
+        # Check for any ungrouped features and add them to 'Other'
+        all_grouped_names = [name for group in feature_groups.values() for name in group]
+        ungrouped_features = {name: value for name, value in features.items() 
+                             if name not in all_grouped_names}
+        
+        if ungrouped_features:
+            if 'Other' not in grouped_features:
+                grouped_features['Other'] = {}
+            grouped_features['Other'].update(ungrouped_features)
+            
+        return grouped_features
     
     def plot_features(self, features: Dict[str, Any], feature_names: Optional[List[str]] = None, 
                      output_dir: Optional[str] = None, figsize: Tuple[int, int] = (12, 6),
