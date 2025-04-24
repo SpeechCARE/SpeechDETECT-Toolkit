@@ -68,6 +68,13 @@ grouped_features = extractor.extract_features(
 # Accessing features when separate_groups=True
 mel_features = grouped_features["Spectral/Mel"]
 print(mel_features)
+
+# Extract features and save to CSV files automatically
+extractor.extract_features(
+    "path/to/audio.wav",
+    features_to_calculate=["all"],
+    output_dir="path/to/output_folder"  # Each file will be saved as a CSV in this directory
+)
 ```
 
 ### Batch Processing
@@ -100,6 +107,13 @@ grouped_results = extractor.extract_features(
 # Access grouped results for a specific file
 file1_grouped_features = grouped_results["path/to/file1.wav"]
 voice_quality_features = file1_grouped_features.get("Voice Quality/Perturbation", {})
+
+# Process multiple files and save each to its own CSV file
+extractor.extract_features(
+    audio_files,
+    features_to_calculate=["frequency", "voice_quality", "intensity"],
+    output_dir="path/to/output_folder"  # Each file will get its own CSV with the same filename
+)
 ```
 
 ## Available Feature Types
@@ -173,7 +187,14 @@ import pandas as pd
 # Extract features
 features = extractor.extract_all_features("path/to/audio.wav")
 
-# Save features to CSV
+# Method 1: Use the built-in CSV export
+extractor.extract_features(
+    "path/to/audio.wav",
+    features_to_calculate=["all"],
+    output_dir="path/to/output_folder"
+)
+
+# Method 2: Manual saving to CSV
 df = pd.DataFrame([features])
 df.to_csv("features.csv", index=False)
 
