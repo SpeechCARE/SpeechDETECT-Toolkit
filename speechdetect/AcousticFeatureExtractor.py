@@ -7,10 +7,8 @@ import numpy as np
 import inspect
 import librosa
 import logging
-import matplotlib.pyplot as plt
-from typing import List, Dict, Union, Any, Optional, Tuple, Set
-from pathlib import Path
-
+import csv
+from typing import List, Dict, Union, Any, Optional
 from .acoustic_features import (\
 
     get_pitch, calculate_time_varying_jitter, get_formants_frame_based,
@@ -916,7 +914,7 @@ class AcousticFeatureExtractor:
         self.logger.info("Extracted a total of %d features with VAD and transcription models", len(final_results))
         return final_results
     
-    def extract_features(self, audio_paths: Union[str, List[str], 'torch.utils.data.DataLoader'], features_to_calculate: Optional[List[str]] = None, separate_groups: bool = False) -> Dict[str, Any]:
+    def extract_features(self, audio_paths: Union[str, List[str], 'torch.utils.data.DataLoader'], features_to_calculate: Optional[List[str]] = None, separate_groups: bool = False, output_dir: Optional[str] = None) -> Dict[str, Any]:
         """
         Extract specified features from a single audio file, a batch of files, or a PyTorch DataLoader
         
@@ -934,6 +932,9 @@ class AcousticFeatureExtractor:
                           'raw', 'transcription'
         separate_groups : bool, optional
             If True, organizes output by feature groups. If False (default), returns a flat dictionary.
+        output_dir : str, optional
+            If provided, extracted features for each file will be saved as a CSV file in this directory
+            with the same name as the audio file.
             
         Returns:
         --------
@@ -951,6 +952,11 @@ class AcousticFeatureExtractor:
             features_to_calculate = ['all']
         
         self.logger.info("Extracting features: %s", ", ".join(features_to_calculate))
+        
+        # Check if output directory exists and create it if needed
+        if output_dir is not None:
+            os.makedirs(output_dir, exist_ok=True)
+            self.logger.info(f"Features will be saved to directory: {output_dir}")
         
         # Check if feature types are valid and available
         requested_unavailable = []
@@ -1006,6 +1012,11 @@ class AcousticFeatureExtractor:
                             batch_results[key] = grouped_file_result
                         else:
                             batch_results[key] = file_result
+                            
+                        # Save features to CSV if output_dir is provided
+                        if output_dir is not None and file_result:
+                            csv_path = os.path.join(output_dir, f"{key}.csv")
+                            self._save_features_to_csv(file_result, csv_path)
                     
                     else:  # Batch of audio samples
                         self.logger.debug(f"Processing batch of {batch.shape[0]} audio tensors")
@@ -1024,6 +1035,11 @@ class AcousticFeatureExtractor:
                                 batch_results[key] = grouped_file_result
                             else:
                                 batch_results[key] = file_result
+                                
+                            # Save features to CSV if output_dir is provided
+                            if output_dir is not None and file_result:
+                                csv_path = os.path.join(output_dir, f"{key}.csv")
+                                self._save_features_to_csv(file_result, csv_path)
                 
                 elif isinstance(batch, (list, tuple)):
                     # Batch is a list or tuple - check first element
@@ -1038,6 +1054,12 @@ class AcousticFeatureExtractor:
                                 batch_results[item] = grouped_file_result
                             else:
                                 batch_results[item] = file_result
+                                
+                            # Save features to CSV if output_dir is provided
+                            if output_dir is not None and file_result:
+                                file_name = os.path.splitext(os.path.basename(item))[0]
+                                csv_path = os.path.join(output_dir, f"{file_name}.csv")
+                                self._save_features_to_csv(file_result, csv_path)
                     
                     elif len(batch) > 0 and isinstance(batch[0], (list, tuple)) and len(batch[0]) > 0 and isinstance(batch[0][0], str):
                         # Batch contains tuples/lists where first element is a file path
@@ -1051,6 +1073,12 @@ class AcousticFeatureExtractor:
                                 batch_results[file_path] = grouped_file_result
                             else:
                                 batch_results[file_path] = file_result
+                                
+                            # Save features to CSV if output_dir is provided
+                            if output_dir is not None and file_result:
+                                file_name = os.path.splitext(os.path.basename(file_path))[0]
+                                csv_path = os.path.join(output_dir, f"{file_name}.csv")
+                                self._save_features_to_csv(file_result, csv_path)
                     
                     else:
                         self.logger.warning(f"Unsupported batch format. Skipping batch {batch_idx}")
@@ -1065,7 +1093,22 @@ class AcousticFeatureExtractor:
 
         # Process a single file
         elif isinstance(audio_paths, str):
-            return self._process_single_file(audio_paths, features_to_calculate, separate_groups)
+            result = self._process_single_file(audio_paths, features_to_calculate, separate_groups)
+            
+            # Save features to CSV if output_dir is provided
+            if output_dir is not None and result:
+                file_name = os.path.splitext(os.path.basename(audio_paths))[0]
+                csv_path = os.path.join(output_dir, f"{file_name}.csv")
+                
+                # For single file, the result might be already grouped
+                if separate_groups:
+                    # Flatten the grouped features for CSV output
+                    flattened_features = self._flatten_grouped_features(result)
+                    self._save_features_to_csv(flattened_features, csv_path)
+                else:
+                    self._save_features_to_csv(result, csv_path)
+            
+            return result
         
         # Process batch of files
         else:
@@ -1083,6 +1126,12 @@ class AcousticFeatureExtractor:
                     batch_results[audio_path] = grouped_file_result
                 else:
                     batch_results[audio_path] = file_result
+                
+                # Save features to CSV if output_dir is provided
+                if output_dir is not None and file_result:
+                    file_name = os.path.splitext(os.path.basename(audio_path))[0]
+                    csv_path = os.path.join(output_dir, f"{file_name}.csv")
+                    self._save_features_to_csv(file_result, csv_path)
             
             self.logger.info("Batch processing complete")
             return batch_results
@@ -1304,127 +1353,68 @@ class AcousticFeatureExtractor:
             
         return grouped_features
     
-    def plot_features(self, features: Dict[str, Any], feature_names: Optional[List[str]] = None, 
-                     output_dir: Optional[str] = None, figsize: Tuple[int, int] = (12, 6),
-                     max_features_per_plot: int = 5) -> List[str]:
+    def _flatten_grouped_features(self, grouped_features: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Plot selected features and optionally save the plots to an output directory
+        Flatten a dictionary of grouped features into a single-level dictionary
+        
+        Parameters:
+        -----------
+        grouped_features : Dict[str, Dict[str, Any]]
+            Dictionary of features organized by group
+            
+        Returns:
+        --------
+        Dict[str, Any]
+            Flattened dictionary of features
+        """
+        flattened = {}
+        for group_name, group_dict in grouped_features.items():
+            for feature_name, feature_value in group_dict.items():
+                flattened[feature_name] = feature_value
+        return flattened
+    
+    def _save_features_to_csv(self, features: Dict[str, Any], csv_path: str) -> None:
+        """
+        Save extracted features to a CSV file
         
         Parameters:
         -----------
         features : Dict[str, Any]
-            Dictionary containing extracted features
-        feature_names : List[str], optional
-            List of feature names to plot. If None, will attempt to plot all plottable features
-        output_dir : str, optional
-            Directory to save plots. If None, plots will only be displayed
-        figsize : Tuple[int, int], optional
-            Figure size for plots (width, height) in inches
-        max_features_per_plot : int, optional
-            Maximum number of features to include in a single plot
-            
-        Returns:
-        --------
-        List[str]
-            List of file paths to saved plots (if output_dir is provided) or empty list otherwise
+            Dictionary of extracted features
+        csv_path : str
+            Path to save the CSV file
         """
-        if not features:
-            self.logger.warning("No features provided for plotting")
-            return []
-            
-        # If no specific features are requested, plot all plottable features
-        if feature_names is None:
-            # Filter out non-numeric or None values before plotting
-            plottable_features = {}
-            for name, value in features.items():
-                if isinstance(value, (int, float)) and value is not None:
-                    plottable_features[name] = value
-                elif isinstance(value, (list, np.ndarray)) and len(value) > 0:
-                    # Check if array contains numeric data
-                    try:
-                        arr = np.asarray(value)
-                        if np.issubdtype(arr.dtype, np.number):
-                            plottable_features[name] = arr
-                    except:
-                        pass # Ignore non-convertible lists/arrays
-                        
-            feature_names = list(plottable_features.keys())
-            self.logger.info(f"No specific features specified. Will plot {len(feature_names)} plottable features")
-        
-        # Create output directory if it doesn't exist
-        if output_dir:
-            Path(output_dir).mkdir(parents=True, exist_ok=True)
-            self.logger.info(f"Plots will be saved to directory: {output_dir}")
-            
-        saved_plots = []
-        
-        # Group features by their category
-        feature_groups = self._group_features(feature_names)
-        
-        for group_name, group_features in feature_groups.items():
-            # Split into manageable chunks if there are too many features
-            feature_chunks = [group_features[i:i+max_features_per_plot] 
-                             for i in range(0, len(group_features), max_features_per_plot)]
-            
-            for chunk_idx, feature_chunk in enumerate(feature_chunks):
-                try:
-                    plt.figure(figsize=figsize)
-                    
-                    # Separate time series and scalar features
-                    time_series_features = {}
-                    scalar_features = {}
-                    for name in feature_chunk:
-                        value = features.get(name)
-                        if isinstance(value, (list, np.ndarray)) and len(value) > 1:
-                            try:
-                                arr = np.asarray(value)
-                                if np.issubdtype(arr.dtype, np.number):
-                                    time_series_features[name] = arr
-                            except:
-                                pass # Ignore non-numeric arrays
-                        elif isinstance(value, (int, float)) and value is not None:
-                            scalar_features[name] = value
-
-                    # Plot time series first if any exist
-                    if time_series_features:
-                        for name, data in time_series_features.items():
-                            plt.plot(data, label=self._get_display_name(name))
-                        
-                        plt.xlabel('Frame Index')
-                        plt.ylabel('Value')
-                        plt.title(f'{group_name} Time Series Features (Plot {chunk_idx+1})')
-                        plt.legend()
-                        plt.grid(True, alpha=0.3)
-                    # Plot scalar features if any exist (can be on same plot or separate)
-                    elif scalar_features: # Use elif to avoid plotting scalars if time series were plotted
-                        names, values = zip(*scalar_features.items())
-                        display_names = [self._get_display_name(name) for name in names]
-                        
-                        plt.bar(range(len(display_names)), values)
-                        plt.xticks(range(len(display_names)), display_names, rotation=45, ha='right')
-                        plt.title(f'{group_name} Features (Plot {chunk_idx+1})')
-                        plt.tight_layout()
-                        plt.grid(axis='y', alpha=0.3)
+        try:
+            with open(csv_path, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['Feature', 'Value'])
+                
+                for feature_name, feature_value in features.items():
+                    # Handle different types of feature values
+                    if isinstance(feature_value, (int, float)) or feature_value is None:
+                        writer.writerow([feature_name, feature_value])
+                    elif isinstance(feature_value, (list, np.ndarray)):
+                        # For arrays, convert to string representation
+                        if isinstance(feature_value, np.ndarray):
+                            # Convert to Python list for better CSV compatibility
+                            feature_list = feature_value.tolist()
+                        else:
+                            feature_list = feature_value
+                            
+                        # Limit array size in CSV to prevent excessive file sizes
+                        if len(feature_list) > 100:
+                            self.logger.warning(f"Feature {feature_name} has {len(feature_list)} elements, truncating to 100 for CSV output")
+                            feature_list = feature_list[:100]
+                            
+                        # Join array elements with commas for CSV
+                        writer.writerow([feature_name, str(feature_list)])
                     else:
-                        # Skip if neither time series nor scalar features found in chunk
-                        plt.close() # Close the empty figure
-                        continue
-
-                    # Save plot if output directory is provided
-                    if output_dir:
-                        plot_name = f"{group_name.lower().replace(' ', '_').replace('/', '_')}_{chunk_idx+1}.png"
-                        plot_path = os.path.join(output_dir, plot_name)
-                        plt.savefig(plot_path, dpi=100, bbox_inches='tight')
-                        saved_plots.append(plot_path)
-                        self.logger.info(f"Saved plot to {plot_path}")
-                    
-                    plt.close() # Close the figure after plotting/saving
-                    
-                except Exception as e:
-                    self.logger.error(f"Error plotting {group_name} features (chunk {chunk_idx+1}): {str(e)}")
-                    plt.close() # Ensure figure is closed on error
-        
-        return saved_plots
+                        # For other types, use string representation
+                        writer.writerow([feature_name, str(feature_value)])
+                        
+            self.logger.info(f"Saved features to {csv_path}")
+        except Exception as e:
+            self.logger.error(f"Error saving features to CSV {csv_path}: {e}")
     
     def _group_features(self, feature_names: List[str]) -> Dict[str, List[str]]:
         """
@@ -1514,66 +1504,4 @@ class AcousticFeatureExtractor:
                     groups[broad_category] = []
                 groups[broad_category].append(name)
         
-        return groups
-    
-    def _get_display_name(self, feature_name: str) -> str:
-        """
-        Convert a feature name to a more readable display name for plots.
-        Removes statistical suffixes and shortens long names.
-        
-        Parameters:
-        ----------
-        feature_name : str
-            Original feature name (e.g., 'F0_sma_amean', 'MFCC[5]_sma_stddev')
-            
-        Returns:
-        --------
-        str
-            Shortened and more readable display name (e.g., 'F0', 'MFCC[5]')
-        """
-        # Define common statistical function names used as suffixes
-        stat_suffixes = [
-            '_sma', '_de', '_max', '_min', '_span', '_maxPos', '_minPos', '_amean',
-            '_linregc1', '_linregc2', '_linregerrA', '_linregerrQ', '_stddev',
-            '_skewness', '_kurtosis', '_quartile1', '_quartile2', '_quartile3',
-            '_iqr1_2', '_iqr2_3', '_iqr1_3', '_percentile1', '_percentile99',
-            '_pctlrange0_1', '_upleveltime75', '_upleveltime90'
-        ]
-        
-        name_part = feature_name
-        
-        # Iteratively remove known suffixes
-        removed_suffix = True
-        while removed_suffix:
-            removed_suffix = False
-            for suffix in stat_suffixes:
-                # Check if the name_part ends with this specific suffix
-                if name_part.endswith(suffix):
-                    # Check if it's preceded by an underscore or another suffix component
-                    # Avoid removing 'sma' from 'sma[0]_max'
-                    prefix_part = name_part[:-len(suffix)]
-                    if prefix_part.endswith('_') or any(prefix_part.endswith(sfx) for sfx in stat_suffixes):
-                        name_part = prefix_part
-                        removed_suffix = True
-                        break # Restart check with the shortened name
-        
-        # Special handling for suffixes like _sma[index]_funcname or _sma_de[index]_funcname
-        import re
-        match = re.match(r"^(.*?)_sma(?:_de)?\[\d+\]_([a-zA-Z0-9_]+)$", name_part)
-        if match:
-            base_name = match.group(1)
-            # Extract the [index] part carefully
-            index_match = re.search(r'\[\d+\]', feature_name) 
-            index_part = index_match.group(0) if index_match else ''
-            name_part = f"{base_name}{index_part}"
-        else:
-             # Simpler check if the previous complex regex didn't match - keep index if present
-             match = re.match(r"^(.*?)\[\d+\]$", name_part)
-             if match:
-                 name_part = match.group(0) # Keep the index part like MFCC[5]
-
-        # Limit length if still too long
-        if len(name_part) > 25:
-            return name_part[:22] + '...'
-            
-        return name_part.replace('_', ' ') # Replace remaining underscores for readability 
+        return groups 
